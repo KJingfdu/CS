@@ -59,7 +59,7 @@ trainer: # Required.
     neg_num: 64
     memory_bank: True
     pixel_update_freq: 20
-    memory_size: 5000
+    memory_size: 2000
     small_area: False
     max_positive: True
     use_moco: True

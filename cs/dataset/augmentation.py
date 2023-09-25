@@ -164,10 +164,10 @@ class RandResize(object):
     def __init__(self, scale, aspect_ratio=None):
         assert isinstance(scale, collections.Iterable) and len(scale) == 2
         if (
-            isinstance(scale, collections.Iterable)
-            and len(scale) == 2
-            and isinstance(scale[0], numbers.Number)
-            and isinstance(scale[1], numbers.Number)
+                isinstance(scale, collections.Iterable)
+                and len(scale) == 2
+                and isinstance(scale[0], numbers.Number)
+                and isinstance(scale[1], numbers.Number)
         ):
             self.scale = scale
         else:
@@ -175,11 +175,11 @@ class RandResize(object):
         if aspect_ratio is None:
             self.aspect_ratio = aspect_ratio
         elif (
-            isinstance(aspect_ratio, collections.Iterable)
-            and len(aspect_ratio) == 2
-            and isinstance(aspect_ratio[0], numbers.Number)
-            and isinstance(aspect_ratio[1], numbers.Number)
-            and 0 < aspect_ratio[0] < aspect_ratio[1]
+                isinstance(aspect_ratio, collections.Iterable)
+                and len(aspect_ratio) == 2
+                and isinstance(aspect_ratio[0], numbers.Number)
+                and isinstance(aspect_ratio[1], numbers.Number)
+                and 0 < aspect_ratio[0] < aspect_ratio[1]
         ):
             self.aspect_ratio = aspect_ratio
         else:
@@ -195,8 +195,8 @@ class RandResize(object):
         temp_aspect_ratio = 1.0
         if self.aspect_ratio is not None:
             temp_aspect_ratio = (
-                self.aspect_ratio[0]
-                + (self.aspect_ratio[1] - self.aspect_ratio[0]) * random.random()
+                    self.aspect_ratio[0]
+                    + (self.aspect_ratio[1] - self.aspect_ratio[0]) * random.random()
             )
             temp_aspect_ratio = math.sqrt(temp_aspect_ratio)
         scale_factor_w = temp_scale * temp_aspect_ratio
@@ -223,12 +223,12 @@ class Crop(object):
             self.crop_h = size
             self.crop_w = size
         elif (
-            isinstance(size, collections.Iterable)
-            and len(size) == 2
-            and isinstance(size[0], int)
-            and isinstance(size[1], int)
-            and size[0] > 0
-            and size[1] > 0
+                isinstance(size, collections.Iterable)
+                and len(size) == 2
+                and isinstance(size[0], int)
+                and isinstance(size[1], int)
+                and size[0] > 0
+                and size[1] > 0
         ):
             self.crop_h = size[0]
             self.crop_w = size[1]
@@ -261,8 +261,8 @@ class Crop(object):
         else:
             h_off = (h - self.crop_h) // 2
             w_off = (w - self.crop_w) // 2
-        image = image[:, :, h_off : h_off + self.crop_h, w_off : w_off + self.crop_w]
-        label = label[:, :, h_off : h_off + self.crop_h, w_off : w_off + self.crop_w]
+        image = image[:, :, h_off: h_off + self.crop_h, w_off: w_off + self.crop_w]
+        label = label[:, :, h_off: h_off + self.crop_h, w_off: w_off + self.crop_w]
         return image, label
 
 
@@ -274,7 +274,7 @@ class RandRotate(object):
     def __init__(self, rotate, ignore_label=255):
         assert isinstance(rotate, collections.Iterable) and len(rotate) == 2
         if isinstance(rotate[0], numbers.Number) and isinstance(
-            rotate[1], numbers.Number
+                rotate[1], numbers.Number
         ):
             self.rotate = rotate
         else:
@@ -403,7 +403,7 @@ class Cutmix(object):
     """
 
     def __init__(
-        self, prop_range, n_holes=1, random_aspect_ratio=True, within_bounds=True
+            self, prop_range, n_holes=1, random_aspect_ratio=True, within_bounds=True
     ):
         self.n_holes = n_holes
         if isinstance(prop_range, float):
@@ -461,7 +461,7 @@ class Cutmix(object):
         masks = np.zeros((n_masks, 1) + (h, w))
         for i, sample_rectangles in enumerate(rectangles):
             for y0, x0, y1, x1 in sample_rectangles:
-                masks[i, 0, int(y0) : int(y1), int(x0) : int(x1)] = 1
+                masks[i, 0, int(y0): int(y1), int(x0): int(x1)] = 1
 
         masks = torch.from_numpy(masks)
 
@@ -488,20 +488,22 @@ def generate_cutout_mask(img_size, ratio=2):
 def generate_class_mask(pseudo_labels):
     labels = torch.unique(pseudo_labels)  # all unique labels
     labels_select = labels[torch.randperm(len(labels))][
-        : len(labels) // 2
-    ]  # randomly select half of labels
+                    : len(labels) // 2
+                    ]  # randomly select half of labels
 
     mask = (pseudo_labels.unsqueeze(-1) == labels_select).any(-1)
     return mask.float()
 
 
-def generate_unsup_data(data, target, logits, mode="cutout"):
+def generate_unsup_data(data, target, logits, feats, mode="cutout"):
     batch_size, _, im_h, im_w = data.shape
+    _, _, h_t, w_t = feats.shape
     device = data.device
 
     new_data = []
     new_target = []
     new_logits = []
+    new_feat = []
     for i in range(batch_size):
         if mode == "cutout":
             mix_mask = generate_cutout_mask([im_h, im_w], ratio=2).to(device)
@@ -516,26 +518,30 @@ def generate_unsup_data(data, target, logits, mode="cutout"):
             mix_mask = generate_cutout_mask([im_h, im_w]).to(device)
         if mode == "classmix":
             mix_mask = generate_class_mask(target[i]).to(device)
-
+        mix_mask_feat = F.interpolate(mix_mask.unsqueeze(0).unsqueeze(0).float(), (h_t, w_t), mode="nearest").squeeze()
         new_data.append(
             (
-                data[i] * mix_mask + data[(i + 1) % batch_size] * (1 - mix_mask)
+                    data[i] * mix_mask + data[(i + 1) % batch_size] * (1 - mix_mask)
             ).unsqueeze(0)
         )
         new_target.append(
             (
-                target[i] * mix_mask + target[(i + 1) % batch_size] * (1 - mix_mask)
+                    target[i] * mix_mask + target[(i + 1) % batch_size] * (1 - mix_mask)
             ).unsqueeze(0)
         )
         new_logits.append(
             (
-                logits[i] * mix_mask + logits[(i + 1) % batch_size] * (1 - mix_mask)
+                    logits[i] * mix_mask + logits[(i + 1) % batch_size] * (1 - mix_mask)
+            ).unsqueeze(0)
+        )
+        new_feat.append(
+            (
+                    feats[i] * mix_mask_feat + feats[(i + 1) % batch_size] * (1 - mix_mask_feat)
             ).unsqueeze(0)
         )
 
-    new_data, new_target, new_logits = (
-        torch.cat(new_data),
-        torch.cat(new_target),
-        torch.cat(new_logits),
+    new_data, new_target, new_logits, new_feat = (
+        torch.cat(new_data), torch.cat(new_target),
+        torch.cat(new_logits), torch.cat(new_feat)
     )
-    return new_data, new_target.long(), new_logits
+    return new_data, new_target.long(), new_logits, new_feat

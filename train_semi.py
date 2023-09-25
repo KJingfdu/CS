@@ -377,13 +377,15 @@ def train(
             if np.random.uniform(0, 1) < 1 and cfg["trainer"]["unsupervised"].get(
                 "apply_aug", False
             ):
-                image_u_aug, label_u_aug, logits_u_aug = generate_unsup_data(
+                image_u_aug, label_u_aug, logits_u_aug, rep_u_t_aug = generate_unsup_data(
                     image_u,
                     label_u_aug.clone(),
                     logits_u_aug.clone(),
+                    rep_u_teacher.clone(),
                     mode=cfg["trainer"]["unsupervised"]["apply_aug"],
                 )
             else:
+                rep_u_t_aug = rep_u_teacher
                 image_u_aug = image_u
 
             # forward
@@ -562,7 +564,7 @@ def train(
                                                  torch.cat([label_l, label_u_aug])[:num_labeled],
                                                  predict_label[:num_labeled]) * weight
                     contra_loss += contra_loss_fn(torch.nn.functional.normalize(rep_all[num_labeled:], dim=1),
-                                                  torch.nn.functional.normalize(rep_u_teacher, dim=1),
+                                                  torch.nn.functional.normalize(rep_u_t_aug, dim=1),
                                                   torch.cat([label_l, label_u_aug])[num_labeled:],
                                                   predict_label[num_labeled:]) * weight
             else:
