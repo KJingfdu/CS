@@ -365,7 +365,8 @@ def train(
 
             # generate pseudo labels first
             model_teacher.eval()
-            pred_u_teacher = model_teacher(image_u)["pred"]
+            outs = model_teacher(image_u)
+            pred_u_teacher, rep_u_teacher = outs["pred"], outs['rep']
             pred_u_teacher = F.interpolate(
                 pred_u_teacher, (h, w), mode="bilinear", align_corners=True
             )
@@ -561,7 +562,7 @@ def train(
                                                  torch.cat([label_l, label_u_aug])[:num_labeled],
                                                  predict_label[:num_labeled]) * weight
                     contra_loss += contra_loss_fn(torch.nn.functional.normalize(rep_all[num_labeled:], dim=1),
-                                                  torch.nn.functional.normalize(rep_all_teacher[num_labeled:], dim=1),
+                                                  torch.nn.functional.normalize(rep_u_teacher, dim=1),
                                                   torch.cat([label_l, label_u_aug])[num_labeled:],
                                                   predict_label[num_labeled:]) * weight
             else:
