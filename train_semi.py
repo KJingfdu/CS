@@ -25,6 +25,8 @@ from cs.utils.loss_helper import (
     compute_unsupervised_loss,
     get_criterion,
     get_contra_loss,
+)
+from cs.utils.contra_helper import (
     UnlabelFilter,
     EvalModule,
 )
@@ -42,7 +44,7 @@ from cs.utils.utils import (
 )
 
 parser = argparse.ArgumentParser(description="Semi-Supervised Semantic Segmentation")
-parser.add_argument("--config", type=str, default="experiments/pascal/5291/ours/config.yaml")
+parser.add_argument("--config", type=str, default="experiments/cityscapes/372/ours/config.yaml")
 parser.add_argument("--local_rank", type=int, default=0)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--port", default=None, type=int)
@@ -555,12 +557,13 @@ def train(
                     weight = cfg["trainer"]["contrastive"].get("loss_weight", 1)
                     _, predict_label = torch.max(pred_all, dim=1)
                     contra_loss = contra_loss_fn(torch.nn.functional.normalize(rep_all[:num_labeled], dim=1),
+                                                 torch.nn.functional.normalize(rep_all_teacher[:num_labeled], dim=1),
                                                  torch.cat([label_l, label_u_aug])[:num_labeled],
                                                  predict_label[:num_labeled]) * weight
                     contra_loss += contra_loss_fn(torch.nn.functional.normalize(rep_all[num_labeled:], dim=1),
+                                                  torch.nn.functional.normalize(rep_all_teacher[num_labeled:], dim=1),
                                                   torch.cat([label_l, label_u_aug])[num_labeled:],
-                                                  predict_label[num_labeled:],
-                                                  unlabeled_filter=unlabeled_filter) * weight
+                                                  predict_label[num_labeled:]) * weight
             else:
                 contra_loss = 0 * rep_all.sum()
 

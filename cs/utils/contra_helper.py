@@ -11,8 +11,7 @@ class MocoContrastLoss(nn.Module):
                  neg_num=64, memory_bank=True, pixel_update_freq=50,
                  memory_size=2000, small_area=True,
                  feat_dim=256, max_positive=False,
-                 device='cpu',
-                 ignore_label=255):
+                 device='cpu', ignore_label=255):
         super(MocoContrastLoss, self).__init__()
         self.temperature = temperature
         self.max_positive = max_positive
@@ -379,8 +378,7 @@ class ContrastLoss(nn.Module):
                  neg_num=64, memory_bank=True, pixel_update_freq=50,
                  memory_size=2000, small_area=True,
                  feat_dim=256, max_positive=False,
-                 device='cpu',
-                 methods=['cons', 'sep'],
+                 device='cpu', methods=['cons', 'sep'],
                  ignore_label=255):
         super(ContrastLoss, self).__init__()
         self.temperature = temperature
@@ -849,7 +847,6 @@ class MemoryBank:
     def _mean_feature(self):
         X_ = torch.cat([torch.mean(f, dim=1, keepdim=True) for f in self.seg_queue], dim=1)
         return X_
-
 
 
 def small_area(mask, N=50):
