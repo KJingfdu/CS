@@ -62,6 +62,7 @@ trainer: # Required.
     memory_size: 5000
     small_area: False
     max_positive: True
+    use_moco: True
     max_steps: 20
 
 saver:
