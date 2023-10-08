@@ -7,7 +7,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 from .utils import dequeue_and_enqueue
-from .contra_helper import MocoContrastLoss, ContrastLoss
+from .contra_helper import MocoContrastLoss
 
 
 def compute_rce_loss(predict, target):
@@ -277,8 +277,7 @@ def get_contra_loss(cfg, device='cpu'):
     feat_dim = cfg['net']['decoder']['kwargs']['inner_planes']
     max_positive = cfg_contra['max_positive']
     use_moco = cfg_contra['use_moco']
-    loss_type = MocoContrastLoss if use_moco else ContrastLoss
-    contra_loss = loss_type(nclass, weak_list, temperature, neg_num,
+    contra_loss = MocoContrastLoss(nclass, weak_list, temperature, neg_num,
                             memory_bank, pixel_update_freq, memory_size,
                             small_area, feat_dim, max_positive, device)
     return contra_loss
