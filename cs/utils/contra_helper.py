@@ -1,10 +1,12 @@
+import time
+
 import numpy as np
 import math
 import cv2
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from .sep_helper import separation, gradient_descent
+from .sep_helper import separation, gradient_descent, separation_func
 
 
 class MocoContrastLoss(nn.Module):
@@ -233,7 +235,7 @@ class MocoContrastLoss(nn.Module):
             loss = self._contrastive(feats_, labels_)
         with torch.no_grad():
             if self.memory_bank is not None:
-                sperate_ratio = self.memory_bank.dequeue_enqueue(feats_t, labels, self.small_area)
+                sperate_ratio = self.memory_bank.active_dequeue_enqueue(feats_t, labels, self.small_area)
                 if self.memory_bank.best_ratio > sperate_ratio:
                     self.memory_bank.best_ratio = sperate_ratio
         return loss
@@ -364,9 +366,7 @@ class MoCoMemoryBank:
         else:
             return self.best_ratio
 
-    def active_dequeue_enqueue(self, feats, labels, SMALL_AREA=True, lr=1e-4, iters=50):
-        memory_queue = [a.clone() for a in self.seg_queue]
-        memory_queue_ptr = self.seg_queue_ptr.clone()
+    def active_dequeue_enqueue(self, feats, labels, SMALL_AREA=True, lr=1e-2, iters=1):
         batch_size, H, W, feat_dim = feats.shape
         memory_size = self.memory_size
         if self.__len__() > 0:
@@ -396,27 +396,36 @@ class MoCoMemoryBank:
                     this_feat_s = torch.transpose(this_feat.view(-1, feat_dim), 0, 1)
 
                     # total area enqueue and dequeue
-                    feat_total = torch.mean(this_feat_s[:, idxs], dim=1).squeeze(1)
+                    feat_total = torch.mean(this_feat_s[:, idxs], dim=1)
 
                     if SMALL_AREA:
                         # small area enqueue and dequeue
                         for mask in mask_list:
-                            feat = torch.mean(this_feat_s[:, mask], dim=1).squeeze(1)
-                            feat_total = torch.cat([feat_total, feat])
+                            feat = torch.mean(this_feat_s[:, mask], dim=1)
+                            feat_total = torch.cat([feat_total, feat], dim=1)
 
                         # to balance local info and context info
 
                     # 关键的一步 之前没引用idxs
-                    feat_total = torch.cat([feat_total, this_feat_s])
+                    feat_total = torch.cat([feat_total, this_feat_s[:, idxs[:, 0]]], dim=1)
                     ptr = int(self.seg_queue_ptr[lb])
                     length = self.seg_queue[lb].shape[1]
 
+                    num_pixel = feat_total.shape[1]
+                    K = min(num_pixel, self.pixel_update_freq)
                     # 在这里计算与最理想的分离方向最相近的向量
-                    feat_cos = feat_total * optimized_feats[lb]
-                    sim_idxs = feat_cos > feat_cos.mean()
-                    K = min(sum(sim_idxs), self.pixel_update_freq)
-                    perm = torch.randperm(K)
-                    feat = this_feat_s[:, sim_idxs[perm[:K], 0]]
+                    if self.__len__() > 0:
+                        feat_cos = torch.mm(optimized_feats[:, lb].unsqueeze(0), feat_total).squeeze()
+                        # 这里以后要考虑是否把最相似的像素特征范围扩大一点
+                        # 或者要考虑采用semi-hard的策略,否则会导致memory bank中的特征类型很少
+                        select_K = min(num_pixel, K)
+                        _, index = torch.topk(feat_cos, k=select_K, dim=0)
+                        perm = torch.randperm(select_K)
+                        feat = feat_total[:, index[perm[:K]]]
+                    else:
+                        perm = torch.randperm(num_pixel)
+                        # 关键的一步 之前没引用idxs
+                        feat = feat_total[:, perm[:K]]
                     if length < memory_size:
                         if ptr + K >= memory_size:
                             self.seg_queue[lb] = torch.cat((self.seg_queue[lb], feat), dim=1)

@@ -20,8 +20,9 @@ def separation_func(vector, N=19):
 
 
 def gradient(vector, class_list):
+    device = vector.device
     # 计算目标函数关于参数的梯度
-    grad = torch.zeros(vector.shape)
+    grad = torch.zeros(vector.shape).to(device)
     length = len(class_list)
     for i in range(length):
         for j in range(i + 1, length):
@@ -37,15 +38,18 @@ def gradient(vector, class_list):
 
 def gradient_descent(vector, class_list, learning_rate, num_iterations):
     vector_new = vector.clone()
-    obj_old = separation_func(vector)
+    # obj_old = separation_func(vector)
     for iteration in range(num_iterations):
         grad = gradient(vector_new, class_list)
         vector_new -= learning_rate * grad
-        obj_new = separation_func(vector_new)
-        if obj_new < obj_old:
-            if obj_old - obj_new < 0.0001:
-                return vector_new
-            obj_old = obj_new
+        # obj_new = separation_func(vector_new)
+        # if obj_new < obj_old:
+        #     if obj_old - obj_new < 0.01:
+        #         return vector_new
+        #     obj_old = obj_new
+        # else:
+        #     print('wrong')
+        #     obj_old = obj_new
     return vector_new
 
 
