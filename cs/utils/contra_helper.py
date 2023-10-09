@@ -412,16 +412,21 @@ class MoCoMemoryBank:
                     length = self.seg_queue[lb].shape[1]
 
                     num_pixel = feat_total.shape[1]
-                    K = min(num_pixel, self.pixel_update_freq)
+                    device = feat_total.device
+                    K = min(num_pixel, self.pixel_update_freq // 2)
                     # 在这里计算与最理想的分离方向最相近的向量
                     if self.__len__() > 0:
                         feat_cos = torch.mm(optimized_feats[:, lb].unsqueeze(0), feat_total).squeeze()
                         # 这里以后要考虑是否把最相似的像素特征范围扩大一点
                         # 或者要考虑采用semi-hard的策略,否则会导致memory bank中的特征类型很少
-                        select_K = min(num_pixel, K)
-                        _, index = torch.topk(feat_cos, k=select_K, dim=0)
-                        perm = torch.randperm(select_K)
-                        feat = feat_total[:, index[perm[:K]]]
+                        _, index = torch.topk(feat_cos, k=K, dim=0)
+                        feat = feat_total[:, index]
+                        if K > self.pixel_update_freq // 2:
+                            remaining_indexs = torch.tensor([i for i in range(num_pixel) if i not in index]).to(device)
+                            num_pixel_2 = remaining_indexs.shape[0]
+                            K_2 = min(num_pixel_2, self.pixel_update_freq // 2)
+                            perm = torch.randperm(num_pixel_2)
+                            feat = torch.cat([feat, feat_total[:, remaining_indexs[perm[:K_2]]]], dim=1)
                     else:
                         perm = torch.randperm(num_pixel)
                         # 关键的一步 之前没引用idxs

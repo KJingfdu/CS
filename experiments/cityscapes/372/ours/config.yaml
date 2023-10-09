@@ -79,7 +79,7 @@ criterion:
 net: # Required.
   num_classes: 19
   sync_bn: False
-  ema_decay: 0.99
+  ema_decay: 0.995
   aux_loss:
     aux_plane: 1024
     loss_weight: 0.4
