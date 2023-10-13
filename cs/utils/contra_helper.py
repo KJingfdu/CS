@@ -267,6 +267,90 @@ class MoCoMemoryBank:
             length += tmp_len
         return length
 
+    def random_dequeue_enqueue(self, feats, labels, SMALL_AREA=True):
+        batch_size, H, W, feat_dim = feats.shape
+        memory_size = self.memory_size
+        with torch.no_grad():
+            for bs in range(batch_size):
+                this_feat = feats[bs].contiguous().to(self.device)
+                this_label = labels[bs].contiguous().to(self.device)
+                this_label_ids = torch.unique(this_label)
+                # this_label_ids = [x for x in this_label_ids if x > 0 and not x == 255]
+                this_label_ids = [x for x in this_label_ids if not x == 255]
+
+                for lb in this_label_ids:
+                    if SMALL_AREA:
+                        # 这些步骤先来得出mask的具体位置
+                        idxs = (this_label == lb).nonzero()
+                        mask = torch.zeros_like(this_label).to(self.device)
+                        mask[idxs[:, 0], idxs[:, 1]] = 1
+                        mask_list = small_area(mask, self.pixel_update_freq)
+
+                    # 转化为方便处理的tensor
+                    this_label_s = this_label.view(-1)
+                    idxs = (this_label_s == lb).nonzero()
+                    this_feat_s = torch.transpose(this_feat.view(-1, feat_dim), 0, 1)
+
+                    # total area enqueue and dequeue
+                    feat = torch.mean(this_feat_s[:, idxs], dim=1).squeeze(1)
+                    ptr = int(self.seg_queue_ptr[lb])
+                    length = self.seg_queue[lb].shape[1]
+                    if length < memory_size:
+                        self.seg_queue[lb] = torch.cat((self.seg_queue[lb], F.normalize(feat, p=2, dim=0).unsqueeze(1)),
+                                                       dim=1)
+                    else:
+                        self.seg_queue[lb][:, ptr] = F.normalize(feat, p=2, dim=0)
+                    self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + 1) % memory_size
+
+                    if SMALL_AREA:
+                        # small area enqueue and dequeue
+                        for mask in mask_list:
+                            feat = torch.mean(this_feat_s[:, mask], dim=1).squeeze(1)
+                            ptr = int(self.seg_queue_ptr[lb])
+                            length = self.seg_queue[lb].shape[1]
+                            if length < memory_size:
+                                self.seg_queue[lb] = torch.cat(
+                                    (self.seg_queue[lb], F.normalize(feat, p=2, dim=0).unsqueeze(1)),
+                                    dim=1)
+                            else:
+                                self.seg_queue[lb][:, ptr] = F.normalize(feat, p=2, dim=0)
+                            self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + 1) % memory_size
+                        # to balance local info and context info
+
+                    # pixel enqueue and dequeue
+                    num_pixel = idxs.shape[0]
+                    perm = torch.randperm(num_pixel)
+                    K = min(num_pixel, self.pixel_update_freq)
+                    # 关键的一步 之前没引用idxs
+                    feat = this_feat_s[:, idxs[perm[:K], 0]]
+                    ptr = int(self.seg_queue_ptr[lb])
+                    length = self.seg_queue[lb].shape[1]
+                    if length < memory_size:
+                        if ptr + K >= memory_size:
+                            self.seg_queue[lb] = torch.cat((self.seg_queue[lb], feat), dim=1)
+                            self.seg_queue[lb] = self.seg_queue[lb][:, -memory_size:]
+                            self.seg_queue_ptr[lb] = 0
+                        else:
+                            self.seg_queue[lb] = torch.cat((self.seg_queue[lb], feat), dim=1)
+                            self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + K) % memory_size
+                    else:
+                        if ptr + K >= memory_size:
+                            self.seg_queue[lb][:, -K:] = feat
+                            self.seg_queue_ptr[lb] = 0
+                        else:
+                            self.seg_queue[lb][:, ptr:ptr + K] = feat
+                            self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + K) % memory_size
+        if self.__len__() > 0:
+            self.mean_feature = torch.cat([torch.mean(f, dim=1, keepdim=True) for f in self.seg_queue], dim=1)
+            ratio = (torch.matmul(torch.transpose(self.mean_feature, 0, 1),
+                                  self.mean_feature)).sum() + self.class_num * (self.class_num - 1)
+            is_queue = True
+            with open('3.txt', 'a') as file:
+                file.write('separation random {}:{}\n'.format(is_queue, ratio))
+            return ratio
+        else:
+            return self.best_ratio
+
     def dequeue_enqueue(self, feats, labels, SMALL_AREA=True):
         memory_queue = [a.clone() for a in self.seg_queue]
         memory_queue_ptr = self.seg_queue_ptr.clone()
@@ -369,11 +453,13 @@ class MoCoMemoryBank:
     def active_dequeue_enqueue(self, feats, labels, SMALL_AREA=True, lr=1e-2, iters=1):
         batch_size, H, W, feat_dim = feats.shape
         memory_size = self.memory_size
+        is_active = False
         if self.__len__() > 0:
             label_ = torch.unique(labels).tolist()
             feats_mean = torch.cat([torch.mean(f, dim=1, keepdim=True) for f in self.seg_queue], dim=1)
             feats_mean = F.normalize(feats_mean, dim=0)
             optimized_feats = gradient_descent(feats_mean, label_, lr, iters)
+            is_active = True
         with torch.no_grad():
             for bs in range(batch_size):
                 this_feat = feats[bs].contiguous().to(self.device)
@@ -413,20 +499,20 @@ class MoCoMemoryBank:
 
                     num_pixel = feat_total.shape[1]
                     device = feat_total.device
-                    K = min(num_pixel, self.pixel_update_freq // 2)
+                    K = min(num_pixel, self.pixel_update_freq)
                     # 在这里计算与最理想的分离方向最相近的向量
-                    if self.__len__() > 0:
+                    if is_active:
                         feat_cos = torch.mm(optimized_feats[:, lb].unsqueeze(0), feat_total).squeeze()
                         # 这里以后要考虑是否把最相似的像素特征范围扩大一点
                         # 或者要考虑采用semi-hard的策略,否则会导致memory bank中的特征类型很少
                         _, index = torch.topk(feat_cos, k=K, dim=0)
                         feat = feat_total[:, index]
-                        if K > self.pixel_update_freq // 2:
-                            remaining_indexs = torch.tensor([i for i in range(num_pixel) if i not in index]).to(device)
-                            num_pixel_2 = remaining_indexs.shape[0]
-                            K_2 = min(num_pixel_2, self.pixel_update_freq // 2)
-                            perm = torch.randperm(num_pixel_2)
-                            feat = torch.cat([feat, feat_total[:, remaining_indexs[perm[:K_2]]]], dim=1)
+                        # if K > self.pixel_update_freq // 2:
+                        #     remaining_indexs = torch.tensor([i for i in range(num_pixel) if i not in index]).to(device)
+                        #     num_pixel_2 = remaining_indexs.shape[0]
+                        #     K_2 = min(num_pixel_2, self.pixel_update_freq // 2)
+                        #     perm = torch.randperm(num_pixel_2)
+                        #     feat = torch.cat([feat, feat_total[:, remaining_indexs[perm[:K_2]]]], dim=1)
                     else:
                         perm = torch.randperm(num_pixel)
                         # 关键的一步 之前没引用idxs
