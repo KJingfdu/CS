@@ -48,7 +48,7 @@ parser.add_argument("--config", type=str, default="experiments/cityscapes/372/ou
 parser.add_argument("--local_rank", type=int, default=0)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--port", default=None, type=int)
-parser.add_argument('--inspect', default=True, type=bool)
+parser.add_argument('--inspect', default=False, type=bool)
 
 
 def main():

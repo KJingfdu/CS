@@ -63,7 +63,6 @@ trainer: # Required.
     small_area: False
     max_positive: True
     use_moco: True
-    max_steps: 20
 
 saver:
   auto_resume: True
