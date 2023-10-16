@@ -291,8 +291,8 @@ class MocoContrastLoss(nn.Module):
         neg_logits = neg_logits.sum(1, keepdims=True)
         if self.max_positive:
             logits_calmax = logits.masked_fill(~mask.bool(), -1 * 2 / self.temperature)
-            # logits_topn = logits_calmax.max(dim=1).values.unsqueeze(1)
-            logits_topn, _ = torch.topk(logits_calmax, k=3, dim=1)
+            logits_topn = logits_calmax.max(dim=1).values.unsqueeze(1)
+            # logits_topn, _ = torch.topk(logits_calmax, k=3, dim=1)
             log_prob = logits_topn - torch.log(torch.exp(logits_topn) + neg_logits)
             loss = - (self.temperature / self.base_temperature) * log_prob
         else:

@@ -566,7 +566,8 @@ def train(
                     contra_loss += contra_loss_fn(torch.nn.functional.normalize(rep_all[num_labeled:], dim=1),
                                                   torch.nn.functional.normalize(rep_all_teacher[num_labeled:], dim=1),
                                                   torch.cat([label_l, label_u_aug])[num_labeled:],
-                                                  predict_label[num_labeled:]) * weight
+                                                  predict_label[num_labeled:],
+                                                  unlabeled=True) * weight
             else:
                 contra_loss = 0 * rep_all.sum()
 
