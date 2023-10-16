@@ -10,7 +10,7 @@ from .sep_helper import separation, gradient_descent, separation_func
 
 
 class MocoContrastLoss(nn.Module):
-    def __init__(self, nclass, weak_list, temperature=0.1,
+    def __init__(self, nclass, temperature=0.1,
                  neg_num=64, memory_bank=True, pixel_update_freq=50,
                  memory_size=2000, small_area=True,
                  feat_dim=256, max_positive=False,
@@ -22,13 +22,11 @@ class MocoContrastLoss(nn.Module):
         self.ignore_label = ignore_label
         self.nclass = nclass
         self.max_samples = int(neg_num * nclass)
-        # 使用一个简单的小trick
-        self.max_views = [neg_num // 4 for _ in range(nclass)]
-        for index in weak_list:
-            self.max_views[index] = neg_num
+        self.max_views = [neg_num for _ in range(nclass)]
         self.small_area = small_area
         if memory_bank:
             self.memory_bank = MoCoMemoryBank(nclass, memory_size, pixel_update_freq, feat_dim, device)
+            self.use_sds = False
         else:
             self.memory_bank = None
 
@@ -42,6 +40,8 @@ class MocoContrastLoss(nn.Module):
         feat_dim = X.shape[-1]
         classes = []
         total_classes = 0
+        if self.use_sds:
+            mean_features = self.memory_bank.mean_feature
         # filter each image, to find what class they have num > self.max_view pixel
         for ii in range(batch_size):
             this_y = y_hat[ii]
@@ -74,6 +74,20 @@ class MocoContrastLoss(nn.Module):
                 indices = None
                 hard_indices = ((this_y_hat == cls_id) & (this_y != cls_id)).nonzero()
                 easy_indices = ((this_y_hat == cls_id) & (this_y == cls_id)).nonzero()
+                if self.use_sds:
+                    mean_feature_i = mean_features[:, cls_id]   # (feat_dim,)
+                    hard_features = X_t[ii, hard_indices, :].squeeze(1)
+                    easy_features = X_t[ii, easy_indices, :].squeeze(1)
+                    feature_cos_hard = torch.mm(hard_features, mean_feature_i.unsqueeze(1)).squeeze()
+                    feature_cos_easy = torch.mm(easy_features, mean_feature_i.unsqueeze(1)).squeeze()
+                    separ_hard_indices = feature_cos_hard >= feature_cos_hard.mean()
+                    separ_easy_indices = feature_cos_easy >= feature_cos_easy.mean()
+                    if not len(separ_hard_indices.shape):
+                        separ_hard_indices = separ_hard_indices.unsqueeze(0)
+                    if not len(separ_easy_indices.shape):
+                        separ_easy_indices = separ_easy_indices.unsqueeze(0)
+                    hard_indices = hard_indices[separ_hard_indices]
+                    easy_indices = easy_indices[separ_easy_indices]
 
                 num_hard = hard_indices.shape[0]
                 num_easy = easy_indices.shape[0]
@@ -88,8 +102,8 @@ class MocoContrastLoss(nn.Module):
                     num_hard_keep = num_hard
                     num_easy_keep = n_view - num_hard_keep
                 else:
-                    all_indices = (this_y_hat == cls_id).nonzero()
-                    num_all = all_indices.shape[0]
+                    all_indices = torch.cat([easy_indices, hard_indices])
+                    num_all = num_hard + num_easy
                     perm = torch.randperm(num_all)
                     all_indices = all_indices[perm]
                     if num_all < n_view:
@@ -110,6 +124,7 @@ class MocoContrastLoss(nn.Module):
                 X_ = torch.cat((X_, X[ii, indices, :].squeeze(1)), dim=0)
                 X_t_ = torch.cat((X_t_, X_t[ii, indices, :].squeeze(1)), dim=0)
                 Y = torch.ones(n_view).cuda() * cls_id
+                assert X_t[ii, indices, :].squeeze(1).shape[0] == Y.shape[0]
                 y_ = torch.cat((y_, Y))
         return X_, X_t_, y_
 
@@ -204,8 +219,8 @@ class MocoContrastLoss(nn.Module):
         neg_logits = neg_logits.sum(1, keepdims=True)
         if self.max_positive:
             logits_calmax = logits.masked_fill(~mask.bool(), -1 * 2 / self.temperature)
-            logits_topn = logits_calmax.max(dim=1).values.unsqueeze(1)
-            # logits_topn, _ = torch.topk(logits_calmax, k=5, dim=1)
+            # logits_topn = logits_calmax.max(dim=1).values.unsqueeze(1)
+            logits_topn, _ = torch.topk(logits_calmax, k=3, dim=1)
             log_prob = logits_topn - torch.log(torch.exp(logits_topn) + neg_logits)
             loss = - (self.temperature / self.base_temperature) * log_prob
         else:
@@ -235,7 +250,7 @@ class MocoContrastLoss(nn.Module):
             loss = self._contrastive(feats_, labels_)
         with torch.no_grad():
             if self.memory_bank is not None:
-                sperate_ratio = self.memory_bank.active_dequeue_enqueue(feats_t, labels, self.small_area)
+                sperate_ratio, self.use_sds = self.memory_bank.active_dequeue_enqueue(feats_t, labels, self.small_area)
                 if self.memory_bank.best_ratio > sperate_ratio:
                     self.memory_bank.best_ratio = sperate_ratio
         return loss
@@ -347,9 +362,9 @@ class MoCoMemoryBank:
             is_queue = True
             with open('3.txt', 'a') as file:
                 file.write('separation random {}:{}\n'.format(is_queue, ratio))
-            return ratio
+            return ratio, True
         else:
-            return self.best_ratio
+            return self.best_ratio, False
 
     def dequeue_enqueue(self, feats, labels, SMALL_AREA=True):
         memory_queue = [a.clone() for a in self.seg_queue]
@@ -446,9 +461,9 @@ class MoCoMemoryBank:
                 is_queue = False
             with open('3.txt', 'a') as file:
                 file.write('separation {}:{}\n'.format(is_queue, ratio))
-            return ratio
+            return ratio, True
         else:
-            return self.best_ratio
+            return self.best_ratio, False
 
     def active_dequeue_enqueue(self, feats, labels, SMALL_AREA=True, lr=1e-2, iters=1):
         batch_size, H, W, feat_dim = feats.shape
@@ -540,9 +555,9 @@ class MoCoMemoryBank:
             is_queue = True
             with open('3.txt', 'a') as file:
                 file.write('separation active {}:{}\n'.format(is_queue, ratio))
-            return ratio
+            return ratio, True
         else:
-            return self.best_ratio
+            return self.best_ratio, False
 
     def sample_queue_negative(self):
         X_ = torch.cat([l for l in self.seg_queue if l.shape[1] > 0], dim=1)

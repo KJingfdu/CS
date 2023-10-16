@@ -262,10 +262,8 @@ def get_contra_loss(cfg, device='cpu'):
     cfg_contra = cfg["trainer"]["contrastive"]
     if 'pascal' in cfg['dataset']['type'] or 'VOC' in cfg['dataset']['type']:
         nclass = 21
-        weak_list = []
     elif 'cityscapes' in cfg['dataset']['type']:
         nclass = 19
-        weak_list = [3, 4, 5, 6, 7, 9, 11, 12, 14, 15, 16, 17, 18]
     else:
         Exception('Wrong')
     temperature = cfg_contra['temperature']
@@ -276,10 +274,9 @@ def get_contra_loss(cfg, device='cpu'):
     small_area = cfg_contra['small_area']
     feat_dim = cfg['net']['decoder']['kwargs']['inner_planes']
     max_positive = cfg_contra['max_positive']
-    use_moco = cfg_contra['use_moco']
-    contra_loss = MocoContrastLoss(nclass, weak_list, temperature, neg_num,
-                            memory_bank, pixel_update_freq, memory_size,
-                            small_area, feat_dim, max_positive, device)
+    contra_loss = MocoContrastLoss(nclass, temperature, neg_num,
+                                   memory_bank, pixel_update_freq, memory_size,
+                                   small_area, feat_dim, max_positive, device)
     return contra_loss
 
 
