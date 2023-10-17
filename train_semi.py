@@ -235,6 +235,11 @@ def main():
                 contra_loss=contra_loss_fn,
             )
 
+        list1 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 25, 50, 75, 100, 150, 200]
+        if epoch + 1 in list1:
+            mean_features = contra_loss_fn.memory_bank.mean_feature
+            mean_features = torch.stack(mean_features)
+            torch.save(mean_features, './' + cfg['saver']['snapshot_dir'] + '/' + 'features_{}'.format(epoch + 1))
         # Validation
         if cfg_trainer["eval_on"]:
             if rank == 0:
@@ -278,17 +283,17 @@ def main():
 
 
 def train(
-    model,
-    model_teacher,
-    optimizer,
-    lr_scheduler,
-    sup_loss_fn,
-    loader_l,
-    loader_u,
-    epoch,
-    tb_logger,
-    logger,
-    **kwargs
+        model,
+        model_teacher,
+        optimizer,
+        lr_scheduler,
+        sup_loss_fn,
+        loader_l,
+        loader_u,
+        epoch,
+        tb_logger,
+        logger,
+        **kwargs
 ):
     global prototype, cfg, unlabeled_filter
     if cfg["trainer"]["contrastive"].get('method', 'u2pl') == 'u2pl':
@@ -359,7 +364,7 @@ def train(
                 # copy student parameters to teacher
                 with torch.no_grad():
                     for t_params, s_params in zip(
-                        model_teacher.parameters(), model.parameters()
+                            model_teacher.parameters(), model.parameters()
                     ):
                         t_params.data = s_params.data
 
@@ -375,7 +380,7 @@ def train(
 
             # apply strong data augmentation: cutout, cutmix, or classmix
             if np.random.uniform(0, 1) < 1 and cfg["trainer"]["unsupervised"].get(
-                "apply_aug", False
+                    "apply_aug", False
             ):
                 image_u_aug, label_u_aug, logits_u_aug, rep_u_t_aug = generate_unsup_data(
                     image_u,
@@ -449,7 +454,7 @@ def train(
                         cfg_contra["low_rank"], cfg_contra["high_rank"]
                     )
                     alpha_t = cfg_contra["low_entropy_threshold"] * (
-                        1 - epoch / cfg["trainer"]["epochs"]
+                            1 - epoch / cfg["trainer"]["epochs"]
                     )
 
                     with torch.no_grad():
@@ -460,7 +465,7 @@ def train(
                             entropy[label_u_aug != 255].cpu().numpy().flatten(), alpha_t
                         )
                         low_entropy_mask = (
-                            entropy.le(low_thresh).float() * (label_u_aug != 255).bool()
+                                entropy.le(low_thresh).float() * (label_u_aug != 255).bool()
                         )
 
                         high_thresh = np.percentile(
@@ -468,7 +473,7 @@ def train(
                             100 - alpha_t,
                         )
                         high_entropy_mask = (
-                            entropy.ge(high_thresh).float() * (label_u_aug != 255).bool()
+                                entropy.ge(high_thresh).float() * (label_u_aug != 255).bool()
                         )
 
                         low_mask_all = torch.cat(
@@ -552,9 +557,9 @@ def train(
 
                     # dist.all_reduce(contra_loss)
                     contra_loss = (
-                        contra_loss
-                        / world_size
-                        * cfg["trainer"]["contrastive"].get("loss_weight", 1)
+                            contra_loss
+                            / world_size
+                            * cfg["trainer"]["contrastive"].get("loss_weight", 1)
                     )
                 else:
                     weight = cfg["trainer"]["contrastive"].get("loss_weight", 1)
@@ -584,17 +589,17 @@ def train(
                     1
                     - 1
                     / (
-                        i_iter
-                        - len(loader_l) * cfg["trainer"].get("sup_only_epoch", 1)
-                        + 1
+                            i_iter
+                            - len(loader_l) * cfg["trainer"].get("sup_only_epoch", 1)
+                            + 1
                     ),
                     ema_decay_origin,
                 )
                 for t_params, s_params in zip(
-                    model_teacher.parameters(), model.parameters()
+                        model_teacher.parameters(), model.parameters()
                 ):
                     t_params.data = (
-                        ema_decay * t_params.data + (1 - ema_decay) * s_params.data
+                            ema_decay * t_params.data + (1 - ema_decay) * s_params.data
                     )
 
         # gather all loss from different gpus
