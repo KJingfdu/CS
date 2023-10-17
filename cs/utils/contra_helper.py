@@ -269,6 +269,12 @@ class MocoContrastLoss(nn.Module):
             return None
         anchor_count = feats.shape[0]
         device = feats.device
+        if anchor_count > 1000:
+            feats = feats.cpu()
+            feats_t = feats_t.cpu()
+            labels = labels.cpu()
+            device = 'cpu'
+            real_device = 'cuda'
         labels = labels.contiguous().view(-1, 1)
 
         anchor_feature = feats
@@ -278,22 +284,21 @@ class MocoContrastLoss(nn.Module):
             contrast_feature_que, contrast_labels_que = self.memory_bank.sample_queue_negative()
             contrast_feature_que, contrast_labels_que = contrast_feature_que.to(device), contrast_labels_que.to(device)
             contrast_labels_que = contrast_labels_que.contiguous().view(-1, 1)
-            contrast_count_que = 1
 
         contrast_labels = labels
         contrast_feature = feats_t
         # contrast_count = anchor_count
 
-        mask = torch.eq(labels, torch.transpose(contrast_labels, 0, 1)).float().cuda()
+        mask = torch.eq(labels, torch.transpose(contrast_labels, 0, 1)).float().to(device)
         # mask = mask.repeat(anchor_count, contrast_count)
         neg_mask = 1 - mask
         # if not memory_bank_use:
         # 跟自己的对比损失没必要计算
-        logits_mask = torch.ones_like(mask).scatter_(1, torch.arange(anchor_count).view(-1, 1).cuda(), 0)
+        logits_mask = torch.ones_like(mask).scatter_(1, torch.arange(anchor_count).view(-1, 1).to(device), 0)
         # 这个mask是计算i与i+的关键部分。
         mask = mask * logits_mask
         if memory_bank_use:
-            mask_que = torch.eq(labels, torch.transpose(contrast_labels_que, 0, 1)).float().cuda()
+            mask_que = torch.eq(labels, torch.transpose(contrast_labels_que, 0, 1)).float().to(device)
             neg_mask_que = 1 - mask_que
             mask = torch.cat([mask, mask_que], dim=1)
             neg_mask = torch.cat([neg_mask, neg_mask_que], dim=1)
@@ -319,7 +324,8 @@ class MocoContrastLoss(nn.Module):
         nan_mask = torch.isnan(loss)
         loss = loss[~nan_mask]
         loss = loss.mean()
-
+        if anchor_count > 1000:
+            loss = loss.to(real_device)
         return loss
 
     def forward(self, feats, feats_t, labels, predict, unlabeled=True, gtlabels=None):
@@ -337,11 +343,12 @@ class MocoContrastLoss(nn.Module):
         feats = feats.permute(0, 2, 3, 1)
         feats_t = feats_t.permute(0, 2, 3, 1)
         # memory_bank_use = self.memory_bank is not None and len(self.memory_bank) > 0
-        feats_, feats_t_, labels_ = self._active_sampling(feats, feats_t, labels, predict, unlabeled)
         if unlabeled and gtlabels is not None:
             feats_, feats_t_, labels_, gtlabels_ = self._active_sampling(feats, feats_t, labels, predict, unlabeled,
                                                                          gt_y=gtlabels)
             self.eval_bank.add(labels_, gtlabels_)
+        else:
+            feats_, feats_t_, labels_ = self._active_sampling(feats, feats_t, labels, predict, unlabeled)
         if feats_.shape[0] == 0:
             loss = 0 * feats.sum()
             return loss
@@ -555,7 +562,7 @@ class MoCoMemoryBank:
         else:
             return self.best_ratio, False
 
-    def active_dequeue_enqueue(self, feats, labels, SMALL_AREA=True, lr=1e-2, iters=1):
+    def active_dequeue_enqueue(self, feats, labels, SMALL_AREA=True, lr=5e-2, iters=1):
         batch_size, H, W, feat_dim = feats.shape
         memory_size = self.memory_size
         is_active = False
@@ -608,13 +615,13 @@ class MoCoMemoryBank:
                     # 在这里计算与最理想的分离方向最相近的向量
                     if is_active:
                         feat_cos = torch.mm(optimized_feats[:, lb].unsqueeze(0), feat_total).squeeze()
-                        feat_total = feat_total[:, feat_cos >= feat_cos.mean()]
-                        num_cos = feat_total.shape[1]
-                        K = min(K, num_cos)
-                        perm = torch.randperm(num_cos)
-                        feat = feat_total[:, perm[:K]]
-                        # _, index = torch.topk(feat_cos, k=K, dim=0)
-                        # feat = feat_total[:, index]
+                        # feat_total = feat_total[:, feat_cos >= feat_cos.mean()]
+                        # num_cos = feat_total.shape[1]
+                        # K = min(K, num_cos)
+                        # perm = torch.randperm(num_cos)
+                        # feat = feat_total[:, perm[:K]]
+                        _, index = torch.topk(feat_cos, k=K, dim=0)
+                        feat = feat_total[:, index]
                     else:
                         perm = torch.randperm(num_pixel)
                         # 关键的一步 之前没引用idxs

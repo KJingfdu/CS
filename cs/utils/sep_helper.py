@@ -19,20 +19,22 @@ def separation_func(vector, N=19):
     return similarity_sum
 
 
-def gradient(vector, class_list):
+def gradient(vector, class_list, ignore_id=255):
+    if ignore_id in class_list:
+        class_list.remove(ignore_id)
     device = vector.device
     # 计算目标函数关于参数的梯度
     grad = torch.zeros(vector.shape).to(device)
     length = len(class_list)
     for i in range(length):
         for j in range(i + 1, length):
-            dot_product = torch.dot(vector[class_list[i]].flatten(), vector[class_list[j]].flatten())
-            norm1 = torch.norm(vector[class_list[i]])
-            norm2 = torch.norm(vector[class_list[j]])
-            gradient_i = (vector[class_list[j]] - dot_product * vector[class_list[i]] / (norm1 ** 2)) / norm2
-            gradient_j = (vector[class_list[i]] - dot_product * vector[class_list[j]] / (norm2 ** 2)) / norm1
-            grad[class_list[i]] += gradient_i
-            grad[class_list[j]] += gradient_j
+            dot_product = torch.dot(vector[:, class_list[i]].flatten(), vector[:, class_list[j]].flatten())
+            norm1 = torch.norm(vector[:, class_list[i]])
+            norm2 = torch.norm(vector[:, class_list[j]])
+            gradient_i = (vector[:, class_list[j]] - dot_product * vector[:, class_list[i]] / (norm1 ** 2)) / norm2
+            gradient_j = (vector[:, class_list[i]] - dot_product * vector[:, class_list[j]] / (norm2 ** 2)) / norm1
+            grad[:, class_list[i]] += gradient_i
+            grad[:, class_list[j]] += gradient_j
     return grad
 
 
