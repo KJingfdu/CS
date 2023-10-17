@@ -339,7 +339,7 @@ class MocoContrastLoss(nn.Module):
         # memory_bank_use = self.memory_bank is not None and len(self.memory_bank) > 0
         feats_, feats_t_, labels_ = self._active_sampling(feats, feats_t, labels, predict, unlabeled)
         if unlabeled and gtlabels is not None:
-            feats_, feats_t_, labels_, gtlabels_ = self._sampling(feats, feats_t, labels, predict, unlabeled,
+            feats_, feats_t_, labels_, gtlabels_ = self._active_sampling(feats, feats_t, labels, predict, unlabeled,
                                                                          gt_y=gtlabels)
             self.eval_bank.add(labels_, gtlabels_)
         if feats_.shape[0] == 0:
@@ -351,7 +351,7 @@ class MocoContrastLoss(nn.Module):
             loss = self._contrastive(feats_, labels_)
         with torch.no_grad():
             if self.memory_bank is not None:
-                sperate_ratio, self.use_sds = self.memory_bank.random_dequeue_enqueue(feats_t, labels, self.small_area)
+                sperate_ratio, self.use_sds = self.memory_bank.active_dequeue_enqueue(feats_t, labels, self.small_area)
                 if self.memory_bank.best_ratio > sperate_ratio:
                     self.memory_bank.best_ratio = sperate_ratio
         return loss
@@ -752,8 +752,11 @@ class EvalFeat:
         self.all = 0
 
     def add(self, pred, gt):
+        delete_ignore_ids = gt != 255
+        gt = gt[delete_ignore_ids]
+        pred = pred[delete_ignore_ids]
         length = gt.shape[0]
-        tmp_right = (pred==gt).sum()
+        tmp_right = (pred == gt).sum()
         self.all += length
         self.right += tmp_right
 
