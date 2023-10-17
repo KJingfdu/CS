@@ -100,12 +100,14 @@ class MocoContrastLoss(nn.Module):
                     num_all = num_hard + num_easy
                     perm = torch.randperm(num_all)
                     all_indices = all_indices[perm]
-                    if num_all < n_view:
+                    if num_all < n_view and num_all > 0:
                         coffient = math.ceil(n_view / num_all)
                         padding_size = n_view - coffient * num_all
                         indices = all_indices.repeat(coffient, 1)
                         if not padding_size == 0:
                             indices = indices[:padding_size]
+                    else:
+                        continue
                     # Log.info('this shoud be never touched! {} {} {}'.format(num_hard, num_easy, n_view))
                     # raise Exception
                 if indices is None:
@@ -291,8 +293,8 @@ class MocoContrastLoss(nn.Module):
         neg_logits = neg_logits.sum(1, keepdims=True)
         if self.max_positive:
             logits_calmax = logits.masked_fill(~mask.bool(), -1 * 2 / self.temperature)
-            logits_topn = logits_calmax.max(dim=1).values.unsqueeze(1)
-            # logits_topn, _ = torch.topk(logits_calmax, k=3, dim=1)
+            # logits_topn = logits_calmax.max(dim=1).values.unsqueeze(1)
+            logits_topn, _ = torch.topk(logits_calmax, k=3, dim=1)
             log_prob = logits_topn - torch.log(torch.exp(logits_topn) + neg_logits)
             loss = - (self.temperature / self.base_temperature) * log_prob
         else:
@@ -316,6 +318,9 @@ class MocoContrastLoss(nn.Module):
         feats_t = feats_t.permute(0, 2, 3, 1)
         # memory_bank_use = self.memory_bank is not None and len(self.memory_bank) > 0
         feats_, feats_t_, labels_ = self._active_sampling(feats, feats_t, labels, predict, unlabeled)
+        if feats_.shape[0] == 0:
+            loss = 0 * feats.sum()
+            return loss
         if self.memory_bank is not None:
             loss = self._contrastive_memory_bank(feats_, feats_t_, labels_)
         else:
