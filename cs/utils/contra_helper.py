@@ -326,6 +326,10 @@ class MocoContrastLoss(nn.Module):
         batchsize, _, h, w = feats.shape
         labels = labels.unsqueeze(1).float().clone()
         labels = torch.nn.functional.interpolate(labels, (feats.shape[2], feats.shape[3]), mode='nearest')
+        if gtlabels is not None:
+            gtlabels = gtlabels.unsqueeze(1).float().clone()
+            gtlabels = torch.nn.functional.interpolate(gtlabels, (feats.shape[2], feats.shape[3]), mode='nearest')
+            gtlabels = gtlabels.squeeze(1).long()
         predict = predict.unsqueeze(1).float().clone()
         predict = torch.nn.functional.interpolate(predict, (feats.shape[2], feats.shape[3]), mode='nearest')
         labels = labels.squeeze(1).long()

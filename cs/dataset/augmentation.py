@@ -533,7 +533,9 @@ def generate_unsup_data(data, logits, feats, target, gt_label=None, mode="cutout
         )
         if gt_label is not None:
             new_label.append(
-                gt_label[i] * mix_mask + gt_label[(i + 1) % batch_size] * (1 - mix_mask)
+                (
+                    gt_label[i] * mix_mask + gt_label[(i + 1) % batch_size] * (1 - mix_mask)
+                ).unsqueeze(0)
             )
         new_logits.append(
             (
