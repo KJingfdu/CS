@@ -342,6 +342,7 @@ def train(
         # image_u, _ = loader_u_iter.next()
         image_u, label_u = loader_u_iter.next()   # 用来eval separation-driven sampling的准确率
         image_u = image_u.cuda()
+        label_u = label_u.cuda()
 
         if epoch < cfg["trainer"].get("sup_only_epoch", 1):
             contra_flag = "none"

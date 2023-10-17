@@ -127,7 +127,7 @@ class MocoContrastLoss(nn.Module):
                 X_ = torch.cat((X_, X[ii, indices, :].squeeze(1)), dim=0)
                 X_t_ = torch.cat((X_t_, X_t[ii, indices, :].squeeze(1)), dim=0)
                 if gt_y is not None:
-                    Y_ = torch.cat((Y_, gt_y[ii, indices]))
+                    Y_ = torch.cat((Y_, gt_y[ii, indices].squeeze(1)))
                 Y = torch.ones(n_view).cuda() * cls_id
                 y_ = torch.cat((y_, Y))
         if gt_y is not None and unlabeled:
@@ -211,7 +211,7 @@ class MocoContrastLoss(nn.Module):
                 X_ = torch.cat((X_, X[ii, indices, :].squeeze(1)), dim=0)
                 X_t_ = torch.cat((X_t_, X_t[ii, indices, :].squeeze(1)), dim=0)
                 if gt_y is not None:
-                    Y_ = torch.cat((Y_, gt_y[ii, indices]))
+                    Y_ = torch.cat((Y_, gt_y[ii, indices].squeeze(1)))
                 Y = torch.ones(n_view).cuda() * cls_id
                 y_ = torch.cat((y_, Y))
         if gt_y is not None and unlabeled:
@@ -336,7 +336,7 @@ class MocoContrastLoss(nn.Module):
         feats_, feats_t_, labels_ = self._active_sampling(feats, feats_t, labels, predict, unlabeled)
         if unlabeled and gtlabels is not None:
             feats_, feats_t_, labels_, gtlabels_ = self._active_sampling(feats, feats_t, labels, predict, unlabeled,
-                                                                         gt_label=gtlabels)
+                                                                         gt_y=gtlabels)
             self.eval_bank.add(labels_, gtlabels_)
         if feats_.shape[0] == 0:
             loss = 0 * feats.sum()
@@ -615,7 +615,7 @@ class MoCoMemoryBank:
                     # 在这里计算与最理想的分离方向最相近的向量
                     if is_active:
                         feat_cos = torch.mm(optimized_feats[:, lb].unsqueeze(0), feat_total).squeeze()
-                        feat_total = feat_total[feat_cos >= feat_cos.mean()]
+                        feat_total = feat_total[:, feat_cos >= feat_cos.mean()]
                         num_cos = feat_total.shape[1]
                         K = min(K, num_cos)
                         perm = torch.randperm(num_cos)
