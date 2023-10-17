@@ -615,13 +615,11 @@ class MoCoMemoryBank:
                     # 在这里计算与最理想的分离方向最相近的向量
                     if is_active:
                         feat_cos = torch.mm(optimized_feats[:, lb].unsqueeze(0), feat_total).squeeze()
-                        cos_indices = feat_cos >= feat_cos.mean()
-                        if not len(cos_indices.shape[0]):
-                            cos_indices = cos_indices.unsqueeze(0)
-                        num_cos = cos_indices.shape[0]
+                        feat_total = feat_total[feat_cos >= feat_cos.mean()]
+                        num_cos = feat_total.shape[1]
                         K = min(K, num_cos)
                         perm = torch.randperm(num_cos)
-                        feat = feat_total[:, cos_indices[perm[:K]]]
+                        feat = feat_total[:, perm[:K]]
                         # _, index = torch.topk(feat_cos, k=K, dim=0)
                         # feat = feat_total[:, index]
                     else:
