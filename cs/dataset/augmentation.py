@@ -495,7 +495,7 @@ def generate_class_mask(pseudo_labels):
     return mask.float()
 
 
-def generate_unsup_data(data, target, logits, feats, mode="cutout"):
+def generate_unsup_data(data, logits, feats, target, gt_label=None, mode="cutout"):
     batch_size, _, im_h, im_w = data.shape
     _, _, h_t, w_t = feats.shape
     device = data.device
@@ -504,6 +504,8 @@ def generate_unsup_data(data, target, logits, feats, mode="cutout"):
     new_target = []
     new_logits = []
     new_feat = []
+    if gt_label is not None:
+        new_label = []
     for i in range(batch_size):
         if mode == "cutout":
             mix_mask = generate_cutout_mask([im_h, im_w], ratio=2).to(device)
@@ -529,6 +531,10 @@ def generate_unsup_data(data, target, logits, feats, mode="cutout"):
                     target[i] * mix_mask + target[(i + 1) % batch_size] * (1 - mix_mask)
             ).unsqueeze(0)
         )
+        if gt_label is not None:
+            new_label.append(
+                gt_label[i] * mix_mask + gt_label[(i + 1) % batch_size] * (1 - mix_mask)
+            )
         new_logits.append(
             (
                     logits[i] * mix_mask + logits[(i + 1) % batch_size] * (1 - mix_mask)
@@ -544,4 +550,7 @@ def generate_unsup_data(data, target, logits, feats, mode="cutout"):
         torch.cat(new_data), torch.cat(new_target),
         torch.cat(new_logits), torch.cat(new_feat)
     )
-    return new_data, new_target.long(), new_logits, new_feat
+    if gt_label is not None:
+        new_label = torch.cat(new_label)
+        return new_data, new_logits, new_feat, new_target.long(), new_label.long()
+    return new_data, new_logits, new_feat, new_target.long()

@@ -14,7 +14,8 @@ class MocoContrastLoss(nn.Module):
                  neg_num=64, memory_bank=True, pixel_update_freq=50,
                  memory_size=2000, small_area=True,
                  feat_dim=256, max_positive=False,
-                 device='cpu', ignore_label=255):
+                 device='cpu', ignore_label=255,
+                 eval_feat=True):
         super(MocoContrastLoss, self).__init__()
         self.temperature = temperature
         self.max_positive = max_positive
@@ -29,11 +30,15 @@ class MocoContrastLoss(nn.Module):
             self.use_sds = False
         else:
             self.memory_bank = None
+        if eval_feat:
+            self.eval_bank = EvalFeat()
 
-    def _active_sampling(self, X, X_t, y_hat, y, unlabeled=True):
+    def _active_sampling(self, X, X_t, y_hat, y, unlabeled=True, gt_y=None):
         batch_size = X.shape[0]
         y_hat = y_hat.contiguous().view(batch_size, -1)
         y = y.contiguous().view(batch_size, -1)
+        if gt_y is not None:
+            gt_y = gt_y.contiguous().view(batch_size, -1)
         X = X.contiguous().view(X.shape[0], -1, X.shape[-1])
         X_t = X_t.contiguous().view(X_t.shape[0], -1, X_t.shape[-1])
         # y_hat为真实标签 y为预测标签
@@ -61,6 +66,8 @@ class MocoContrastLoss(nn.Module):
         X_ = torch.empty((0, feat_dim)).cuda()
         X_t_ = torch.empty((0, feat_dim)).cuda()
         y_ = torch.empty(0).cuda()
+        if gt_y is not None:
+            Y_ = torch.empty(0).cuda()
         for ii in range(batch_size):
             this_y_hat = y_hat[ii]
             this_y = y[ii]
@@ -119,22 +126,26 @@ class MocoContrastLoss(nn.Module):
 
                 X_ = torch.cat((X_, X[ii, indices, :].squeeze(1)), dim=0)
                 X_t_ = torch.cat((X_t_, X_t[ii, indices, :].squeeze(1)), dim=0)
+                if gt_y is not None:
+                    Y_ = torch.cat((Y_, gt_y[ii, indices]))
                 Y = torch.ones(n_view).cuda() * cls_id
                 y_ = torch.cat((y_, Y))
+        if gt_y is not None and unlabeled:
+            return X_, X_t_, y_, Y_
         return X_, X_t_, y_
 
-    def _sampling(self, X, X_t, y_hat, y, unlabeled=True):
+    def _sampling(self, X, X_t, y_hat, y, unlabeled=True, gt_y=None):
         batch_size = X.shape[0]
         y_hat = y_hat.contiguous().view(batch_size, -1)
         y = y.contiguous().view(batch_size, -1)
+        if gt_y is not None:
+            gt_y = gt_y.contiguous().view(batch_size, -1)
         X = X.contiguous().view(X.shape[0], -1, X.shape[-1])
         X_t = X_t.contiguous().view(X_t.shape[0], -1, X_t.shape[-1])
         # y_hat为真实标签 y为预测标签
         feat_dim = X.shape[-1]
         classes = []
         total_classes = 0
-        if self.use_sds:
-            mean_features = self.memory_bank.mean_feature
         # filter each image, to find what class they have num > self.max_view pixel
         for ii in range(batch_size):
             this_y = y_hat[ii]
@@ -156,6 +167,7 @@ class MocoContrastLoss(nn.Module):
         X_ = torch.empty((0, feat_dim)).cuda()
         X_t_ = torch.empty((0, feat_dim)).cuda()
         y_ = torch.empty(0).cuda()
+        Y_ = torch.empty(0).cuda()
         for ii in range(batch_size):
             this_y_hat = y_hat[ii]
             this_y = y[ii]
@@ -198,8 +210,12 @@ class MocoContrastLoss(nn.Module):
 
                 X_ = torch.cat((X_, X[ii, indices, :].squeeze(1)), dim=0)
                 X_t_ = torch.cat((X_t_, X_t[ii, indices, :].squeeze(1)), dim=0)
+                if gt_y is not None:
+                    Y_ = torch.cat((Y_, gt_y[ii, indices]))
                 Y = torch.ones(n_view).cuda() * cls_id
                 y_ = torch.cat((y_, Y))
+        if gt_y is not None and unlabeled:
+            return X_, X_t_, y_, Y_
         return X_, X_t_, y_
 
     def _contrastive(self, feats, labels):
@@ -306,7 +322,7 @@ class MocoContrastLoss(nn.Module):
 
         return loss
 
-    def forward(self, feats, feats_t, labels, predict, unlabeled=True):
+    def forward(self, feats, feats_t, labels, predict, unlabeled=True, gtlabels=None):
         batchsize, _, h, w = feats.shape
         labels = labels.unsqueeze(1).float().clone()
         labels = torch.nn.functional.interpolate(labels, (feats.shape[2], feats.shape[3]), mode='nearest')
@@ -318,6 +334,10 @@ class MocoContrastLoss(nn.Module):
         feats_t = feats_t.permute(0, 2, 3, 1)
         # memory_bank_use = self.memory_bank is not None and len(self.memory_bank) > 0
         feats_, feats_t_, labels_ = self._active_sampling(feats, feats_t, labels, predict, unlabeled)
+        if unlabeled and gtlabels is not None:
+            feats_, feats_t_, labels_, gtlabels_ = self._active_sampling(feats, feats_t, labels, predict, unlabeled,
+                                                                         gt_label=gtlabels)
+            self.eval_bank.add(labels_, gtlabels_)
         if feats_.shape[0] == 0:
             loss = 0 * feats.sum()
             return loss
@@ -733,3 +753,21 @@ class EvalModule:
         self.store_features = [torch.empty(self.feat_dim, 0).to(self.device) for _ in range(self.nclass)]
         self.num_features = [0 for _ in range(self.nclass)]
         return separate_ratio, var_features, cons
+
+
+class EvalFeat:
+    def __init__(self):
+        self.right = 0
+        self.all = 0
+
+    def add(self, pred, gt):
+        length = gt.shape[0]
+        tmp_right = (pred==gt).sum()
+        self.all += length
+        self.right += tmp_right
+
+    def indicator(self):
+        accuracy = self.right / self.all
+        self.all = 0
+        self.right = 0
+        return accuracy

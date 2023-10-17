@@ -237,9 +237,12 @@ def main():
 
         list1 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 25, 50, 75, 100, 150, 200]
         if epoch + 1 in list1:
-            mean_features = contra_loss_fn.memory_bank.mean_feature
-            mean_features = torch.stack(mean_features)
-            torch.save(mean_features, './' + cfg['saver']['snapshot_dir'] + '/' + 'features_{}'.format(epoch + 1))
+            features = contra_loss_fn.memory_bank.seg_queue
+            torch.save(features, './' + cfg['saver']['snapshot_dir'] + '/' + 'features_{}'.format(epoch + 1))
+        sampling_num = contra_loss_fn.eval_bank.all
+        accuracy = contra_loss_fn.eval_bank.indicator()
+        tb_logger.add_scalar('sampling_num acc', sampling_num, epoch)
+        tb_logger.add_scalar('sampling acc', accuracy, epoch)
         # Validation
         if cfg_trainer["eval_on"]:
             if rank == 0:
@@ -336,7 +339,8 @@ def train(
         batch_size, h, w = label_l.size()
         image_l, label_l = image_l.cuda(), label_l.cuda()
 
-        image_u, _ = loader_u_iter.next()
+        # image_u, _ = loader_u_iter.next()
+        image_u, label_u = loader_u_iter.next()   # 用来eval separation-driven sampling的准确率
         image_u = image_u.cuda()
 
         if epoch < cfg["trainer"].get("sup_only_epoch", 1):
@@ -382,11 +386,12 @@ def train(
             if np.random.uniform(0, 1) < 1 and cfg["trainer"]["unsupervised"].get(
                     "apply_aug", False
             ):
-                image_u_aug, label_u_aug, logits_u_aug, rep_u_t_aug = generate_unsup_data(
+                image_u_aug, logits_u_aug, rep_u_t_aug, label_u_aug, label_u_gt = generate_unsup_data(
                     image_u,
-                    label_u_aug.clone(),
                     logits_u_aug.clone(),
                     rep_u_teacher.clone(),
+                    label_u_aug.clone(),
+                    gt_label=label_u.clone(),
                     mode=cfg["trainer"]["unsupervised"]["apply_aug"],
                 )
             else:
@@ -572,7 +577,8 @@ def train(
                                                   torch.nn.functional.normalize(rep_all_teacher[num_labeled:], dim=1),
                                                   torch.cat([label_l, label_u_aug])[num_labeled:],
                                                   predict_label[num_labeled:],
-                                                  unlabeled=True) * weight
+                                                  unlabeled=True,
+                                                  gtlabels=label_u_gt) * weight
             else:
                 contra_loss = 0 * rep_all.sum()
 
