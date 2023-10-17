@@ -339,7 +339,7 @@ class MocoContrastLoss(nn.Module):
         # memory_bank_use = self.memory_bank is not None and len(self.memory_bank) > 0
         feats_, feats_t_, labels_ = self._active_sampling(feats, feats_t, labels, predict, unlabeled)
         if unlabeled and gtlabels is not None:
-            feats_, feats_t_, labels_, gtlabels_ = self._active_sampling(feats, feats_t, labels, predict, unlabeled,
+            feats_, feats_t_, labels_, gtlabels_ = self._sampling(feats, feats_t, labels, predict, unlabeled,
                                                                          gt_y=gtlabels)
             self.eval_bank.add(labels_, gtlabels_)
         if feats_.shape[0] == 0:
@@ -351,7 +351,7 @@ class MocoContrastLoss(nn.Module):
             loss = self._contrastive(feats_, labels_)
         with torch.no_grad():
             if self.memory_bank is not None:
-                sperate_ratio, self.use_sds = self.memory_bank.active_dequeue_enqueue(feats_t, labels, self.small_area)
+                sperate_ratio, self.use_sds = self.memory_bank.random_dequeue_enqueue(feats_t, labels, self.small_area)
                 if self.memory_bank.best_ratio > sperate_ratio:
                     self.memory_bank.best_ratio = sperate_ratio
         return loss
@@ -406,17 +406,6 @@ class MoCoMemoryBank:
                     this_label_s = this_label.view(-1)
                     idxs = (this_label_s == lb).nonzero()
                     this_feat_s = torch.transpose(this_feat.view(-1, feat_dim), 0, 1)
-
-                    # total area enqueue and dequeue
-                    feat = torch.mean(this_feat_s[:, idxs], dim=1).squeeze(1)
-                    ptr = int(self.seg_queue_ptr[lb])
-                    length = self.seg_queue[lb].shape[1]
-                    if length < memory_size:
-                        self.seg_queue[lb] = torch.cat((self.seg_queue[lb], F.normalize(feat, p=2, dim=0).unsqueeze(1)),
-                                                       dim=1)
-                    else:
-                        self.seg_queue[lb][:, ptr] = F.normalize(feat, p=2, dim=0)
-                    self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + 1) % memory_size
 
                     if SMALL_AREA:
                         # small area enqueue and dequeue
