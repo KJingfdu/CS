@@ -15,7 +15,7 @@ def separation_func(vector, N=19):
     similarity_sum = 0
     for i in range(N):
         for j in range(i + 1, N):
-            similarity_sum += cosine_similarity(vector[i], vector[j])
+            similarity_sum += cosine_similarity(vector[:, i], vector[:, j])
     return similarity_sum
 
 

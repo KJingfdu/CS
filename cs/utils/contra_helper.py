@@ -134,6 +134,118 @@ class MocoContrastLoss(nn.Module):
             return X_, X_t_, y_, Y_
         return X_, X_t_, y_
 
+    def _mid_sampling(self, X, X_t, y_hat, y, unlabeled=True, gt_y=None, decay=0.5):
+        batch_size = X.shape[0]
+        y_hat = y_hat.contiguous().view(batch_size, -1)
+        y = y.contiguous().view(batch_size, -1)
+        if gt_y is not None:
+            gt_y = gt_y.contiguous().view(batch_size, -1)
+        X = X.contiguous().view(X.shape[0], -1, X.shape[-1])
+        X_t = X_t.contiguous().view(X_t.shape[0], -1, X_t.shape[-1])
+        # y_hat为真实标签 y为预测标签
+        feat_dim = X.shape[-1]
+        classes = []
+        total_classes = 0
+        if self.use_sds and unlabeled:
+            mean_features = self.memory_bank.mean_feature
+        # filter each image, to find what class they have num > self.max_view pixel
+        for ii in range(batch_size):
+            this_y = y_hat[ii]
+            this_classes = torch.unique(this_y)
+            # this_classes = [x for x in this_classes if x > 0 and x != self.ignore_label]
+            this_classes = [x for x in this_classes if x >= 0 and x != self.ignore_label]
+            this_classes = [x for x in this_classes if (this_y == x).nonzero().shape[0] > self.max_views[x]]
+            classes.append(this_classes)
+            total_classes += len(this_classes)
+
+        if total_classes == 0:
+            return None, None
+
+        # n_view = self.max_samples // total_classes
+        # n_view = min(n_view, self.max_views)
+        # X_ = torch.zeros((total_classes, n_view, feat_dim), dtype=torch.float).cuda()
+        X_ = torch.empty((0, feat_dim)).cuda()
+        X_t_ = torch.empty((0, feat_dim)).cuda()
+        y_ = torch.empty(0).cuda()
+        if gt_y is not None:
+            Y_ = torch.empty(0).cuda()
+        for ii in range(batch_size):
+            this_y_hat = y_hat[ii]
+            this_y = y[ii]
+            this_classes = classes[ii]
+            for cls_id in this_classes:
+                n_view = self.max_views[cls_id]
+                indices = None
+                hard_indices = ((this_y_hat == cls_id) & (this_y != cls_id)).nonzero()
+                easy_indices = ((this_y_hat == cls_id) & (this_y == cls_id)).nonzero()
+                if self.use_sds and unlabeled:
+                    mean_feature_i = mean_features[:, cls_id]  # (feat_dim,)
+                    hard_features = X_t[ii, hard_indices, :].squeeze(1)
+                    easy_features = X_t[ii, easy_indices, :].squeeze(1)
+                    # feature_cos_seg = torch.mm(self.memory_bank.seg_queue[cls_id].transpose(1, 0),
+                    #                            mean_feature_i.unsqueeze(1)).squeeze()
+                    feature_cos_hard = torch.mm(hard_features, mean_feature_i.unsqueeze(1)).squeeze()
+                    feature_cos_easy = torch.mm(easy_features, mean_feature_i.unsqueeze(1)).squeeze()
+                    # mean_seg = feature_cos_seg.mean()
+                    mean_hard = feature_cos_hard.mean()
+                    # mean_easy = feature_cos_easy.mean()
+                    if not torch.isnan(mean_hard):
+                        self.memory_bank.query_hard_cos_mean[cls_id] = decay * self.memory_bank.query_hard_cos_mean[
+                            cls_id] + (1 - decay) * mean_hard
+                    # if not torch.isnan(mean_easy):
+                    #     self.memory_bank.query_easy_cos_mean[cls_id] = decay * self.memory_bank.query_easy_cos_mean[
+                    #         cls_id] + (1 - decay) * mean_easy
+                    separ_hard_indices = feature_cos_hard >= self.memory_bank.query_hard_cos_mean[cls_id]
+                    separ_easy_indices = feature_cos_easy >= self.memory_bank.query_hard_cos_mean[cls_id]
+                    if not len(separ_hard_indices.shape):
+                        separ_hard_indices = separ_hard_indices.unsqueeze(0)
+                    if not len(separ_easy_indices.shape):
+                        separ_easy_indices = separ_easy_indices.unsqueeze(0)
+                    hard_indices = hard_indices[separ_hard_indices]
+                    easy_indices = easy_indices[separ_easy_indices]
+                num_hard = hard_indices.shape[0]
+                num_easy = easy_indices.shape[0]
+                if num_hard >= n_view / 2 and num_easy >= n_view / 2:
+                    num_hard_keep = n_view // 2
+                    num_easy_keep = n_view - num_hard_keep
+                elif num_hard + num_easy >= n_view and num_easy < n_view / 2:
+                    num_easy_keep = num_easy
+                    num_hard_keep = n_view - num_easy_keep
+                elif num_hard + num_easy >= n_view and num_hard < n_view / 2:
+                    num_hard_keep = num_hard
+                    num_easy_keep = n_view - num_hard_keep
+                else:
+                    all_indices = torch.cat([easy_indices, hard_indices])
+                    num_all = num_hard + num_easy
+                    perm = torch.randperm(num_all)
+                    all_indices = all_indices[perm]
+                    if num_all < n_view and num_all > 0:
+                        coffient = math.ceil(n_view / num_all)
+                        padding_size = n_view - coffient * num_all
+                        indices = all_indices.repeat(coffient, 1)
+                        if not padding_size == 0:
+                            indices = indices[:padding_size]
+                    else:
+                        continue
+                    # Log.info('this shoud be never touched! {} {} {}'.format(num_hard, num_easy, n_view))
+                    # raise Exception
+                if indices is None:
+                    perm = torch.randperm(num_hard)
+                    hard_indices = hard_indices[perm[:num_hard_keep]]
+                    perm = torch.randperm(num_easy)
+                    easy_indices = easy_indices[perm[:num_easy_keep]]
+                    indices = torch.cat((hard_indices, easy_indices), dim=0)
+
+                X_ = torch.cat((X_, X[ii, indices, :].squeeze(1)), dim=0)
+                X_t_ = torch.cat((X_t_, X_t[ii, indices, :].squeeze(1)), dim=0)
+                if gt_y is not None:
+                    Y_ = torch.cat((Y_, gt_y[ii, indices].squeeze(1)))
+                Y = torch.ones(n_view).cuda() * cls_id
+                y_ = torch.cat((y_, Y))
+        if gt_y is not None and unlabeled:
+            return X_, X_t_, y_, Y_
+        return X_, X_t_, y_
+
     def _sampling(self, X, X_t, y_hat, y, unlabeled=True, gt_y=None):
         batch_size = X.shape[0]
         y_hat = y_hat.contiguous().view(batch_size, -1)
@@ -344,11 +456,11 @@ class MocoContrastLoss(nn.Module):
         feats_t = feats_t.permute(0, 2, 3, 1)
         # memory_bank_use = self.memory_bank is not None and len(self.memory_bank) > 0
         if unlabeled and gtlabels is not None:
-            feats_, feats_t_, labels_, gtlabels_ = self._active_sampling(feats, feats_t, labels, predict, unlabeled,
-                                                                         gt_y=gtlabels)
+            feats_, feats_t_, labels_, gtlabels_ = self._mid_sampling(feats, feats_t, labels, predict, unlabeled,
+                                                                      gt_y=gtlabels)
             self.eval_bank.add(labels_, gtlabels_)
         else:
-            feats_, feats_t_, labels_ = self._active_sampling(feats, feats_t, labels, predict, unlabeled)
+            feats_, feats_t_, labels_ = self._mid_sampling(feats, feats_t, labels, predict, unlabeled)
         if feats_.shape[0] == 0:
             loss = 0 * feats.sum()
             return loss
@@ -358,7 +470,7 @@ class MocoContrastLoss(nn.Module):
             loss = self._contrastive(feats_, labels_)
         with torch.no_grad():
             if self.memory_bank is not None:
-                sperate_ratio, self.use_sds = self.memory_bank.active_dequeue_enqueue(feats_t, labels, self.small_area)
+                sperate_ratio, self.use_sds = self.memory_bank.mid_dequeue_enqueue(feats_t, labels, unlabeled)
                 if self.memory_bank.best_ratio > sperate_ratio:
                     self.memory_bank.best_ratio = sperate_ratio
         return loss
@@ -378,6 +490,9 @@ class MoCoMemoryBank:
         self.best_ratio = 2 * self.class_num * self.class_num
         self.split = split
         self.mean_feature = [torch.zeros((feat_dim, self.class_num)).to(self.device) for _ in range(class_num)]
+        self.queue_cos_mean = -torch.ones((self.class_num,)).to(self.device)
+        self.query_hard_cos_mean = -torch.ones((self.class_num,)).to(self.device)
+        self.query_easy_cos_mean = -torch.ones((self.class_num,)).to(self.device)
 
     def __len__(self):
         length = 0
@@ -622,6 +737,81 @@ class MoCoMemoryBank:
                         # feat = feat_total[:, perm[:K]]
                         _, index = torch.topk(feat_cos, k=K, dim=0)
                         feat = feat_total[:, index]
+                    else:
+                        perm = torch.randperm(num_pixel)
+                        # 关键的一步 之前没引用idxs
+                        feat = feat_total[:, perm[:K]]
+                    if length < memory_size:
+                        if ptr + K >= memory_size:
+                            self.seg_queue[lb] = torch.cat((self.seg_queue[lb], feat), dim=1)
+                            self.seg_queue[lb] = self.seg_queue[lb][:, -memory_size:]
+                            self.seg_queue_ptr[lb] = 0
+                        else:
+                            self.seg_queue[lb] = torch.cat((self.seg_queue[lb], feat), dim=1)
+                            self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + K) % memory_size
+                    else:
+                        if ptr + K >= memory_size:
+                            self.seg_queue[lb][:, -K:] = feat
+                            self.seg_queue_ptr[lb] = 0
+                        else:
+                            self.seg_queue[lb][:, ptr:ptr + K] = feat
+                            self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + K) % memory_size
+
+        if self.__len__() > 0:
+            self.mean_feature = torch.cat([torch.mean(f, dim=1, keepdim=True) for f in self.seg_queue], dim=1)
+            ratio = (torch.matmul(torch.transpose(self.mean_feature, 0, 1),
+                                  self.mean_feature)).sum() + self.class_num * (self.class_num - 1)
+            is_queue = True
+            with open('3.txt', 'a') as file:
+                file.write('separation active {}:{}\n'.format(is_queue, ratio))
+            return ratio, True
+        else:
+            return self.best_ratio, False
+
+    def mid_dequeue_enqueue(self, feats, labels, unlabeled=True, decay=0.5):
+        batch_size, H, W, feat_dim = feats.shape
+        memory_size = self.memory_size
+        is_active = False
+        if self.__len__() > 0 and unlabeled:
+            feats_mean = torch.cat([torch.mean(f, dim=1, keepdim=True) for f in self.seg_queue], dim=1)
+            feats_mean = F.normalize(feats_mean, dim=0)
+            is_active = True
+        with torch.no_grad():
+            for bs in range(batch_size):
+                this_feat = feats[bs].contiguous().to(self.device)
+                this_label = labels[bs].contiguous().to(self.device)
+                this_label_ids = torch.unique(this_label)
+                # this_label_ids = [x for x in this_label_ids if x > 0 and not x == 255]
+                this_label_ids = [x for x in this_label_ids if not x == 255]
+
+                for lb in this_label_ids:
+                    # 转化为方便处理的tensor
+                    this_label_s = this_label.view(-1)
+                    idxs = (this_label_s == lb).nonzero()
+                    this_feat_s = torch.transpose(this_feat.view(-1, feat_dim), 0, 1)
+
+                    # total area enqueue and dequeue
+                    feat_total = torch.mean(this_feat_s[:, idxs], dim=1)
+
+                    # 关键的一步 之前没引用idxs
+                    feat_total = torch.cat([feat_total, this_feat_s[:, idxs[:, 0]]], dim=1)
+                    ptr = int(self.seg_queue_ptr[lb])
+                    length = self.seg_queue[lb].shape[1]
+
+                    num_pixel = feat_total.shape[1]
+                    K = min(num_pixel, self.pixel_update_freq)
+                    # 在这里计算与最理想的分离方向最相近的向量
+                    if is_active and unlabeled:
+                        # feat_cos_lb = torch.mm(feats_mean[:, lb].unsqueeze(0), self.seg_queue[lb]).squeeze()
+                        feat_cos = torch.mm(feats_mean[:, lb].unsqueeze(0), feat_total).squeeze()
+                        self.queue_cos_mean[lb] = decay * self.queue_cos_mean[lb] + (1 - decay) * feat_cos.mean()
+                        feat_total = feat_total[:, feat_cos >= self.queue_cos_mean[lb]]
+                        num_cos = feat_total.shape[1]
+                        K = min(K, num_cos)
+                        perm = torch.randperm(num_cos)
+                        feat = feat_total[:, perm[:K]]
+                        # _, index = torch.topk(feat_cos, k=K, dim=0)
+                        # feat = feat_total[:, index]
                     else:
                         perm = torch.randperm(num_pixel)
                         # 关键的一步 之前没引用idxs
