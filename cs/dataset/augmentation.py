@@ -245,25 +245,47 @@ class Crop(object):
             raise (RuntimeError("ignore_label should be an integer number\n"))
 
     def __call__(self, image, label):
+        # 获取原始图像的高度和宽度
         h, w = image.size()[-2:]
+
+        # 计算需要填充的像素数
         pad_h = max(self.crop_h - h, 0)
         pad_w = max(self.crop_w - w, 0)
+
+        # 计算上下左右填充的像素数
         pad_h_half = int(pad_h / 2)
         pad_w_half = int(pad_w / 2)
+
+        # 如果需要填充，则进行填充操作
         if pad_h > 0 or pad_w > 0:
             border = (pad_w_half, pad_w - pad_w_half, pad_h_half, pad_h - pad_h_half)
             image = F.pad(image, border, mode="constant", value=0.0)
             label = F.pad(label, border, mode="constant", value=self.ignore_label)
+
+            # 生成 True-False 掩码，表示填充部分
+            mask = torch.ones_like(image, dtype=torch.bool)
+            mask[:, :, pad_h_half:pad_h_half+h, pad_w_half:pad_w_half+w] = False
+
+        # 获取填充后的图像的高度和宽度
         h, w = image.size()[-2:]
+
+        # 根据裁剪类型确定裁剪的起始位置
         if self.crop_type == "rand":
             h_off = random.randint(0, h - self.crop_h)
             w_off = random.randint(0, w - self.crop_w)
         else:
             h_off = (h - self.crop_h) // 2
             w_off = (w - self.crop_w) // 2
+
+        # 进行裁剪操作
         image = image[:, :, h_off: h_off + self.crop_h, w_off: w_off + self.crop_w]
         label = label[:, :, h_off: h_off + self.crop_h, w_off: w_off + self.crop_w]
-        return image, label
+
+        if pad_h > 0 or pad_w > 0:
+            # 裁剪 True-False 掩码
+            mask = mask[:, :, h_off: h_off + self.crop_h, w_off: w_off + self.crop_w]
+
+        return image, label, mask
 
 
 class RandRotate(object):
