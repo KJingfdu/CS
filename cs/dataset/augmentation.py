@@ -32,15 +32,18 @@ class Compose(object):
         valid = None
         for idx, t in enumerate(self.segtransforms):
             if idx < 5:
-                image, label = t(image, label)
+                try:
+                    image, label = t(image, label)
+                except:
+                    image, label, masks = t(image, label)
             else:
                 try:
                     img_origin, label_origin, img, label, valid = t(image, label)
                 except:
                     img, label, masks = t(image, label)
 
-        if idx < 5:
-            return image, label
+        if idx <= 5:
+            return image, label, masks
         elif valid is not None:
             return img_origin, label_origin, img, label, valid
         else:
@@ -263,8 +266,8 @@ class Crop(object):
             label = F.pad(label, border, mode="constant", value=self.ignore_label)
 
             # 生成 True-False 掩码，表示填充部分
-            mask = torch.ones_like(image, dtype=torch.bool)
-            mask[:, :, pad_h_half:pad_h_half+h, pad_w_half:pad_w_half+w] = False
+            mask = torch.zeros_like(label, dtype=torch.bool)
+            mask[:, :, pad_h_half:pad_h_half+h, pad_w_half:pad_w_half+w] = True
 
         # 获取填充后的图像的高度和宽度
         h, w = image.size()[-2:]
@@ -284,6 +287,8 @@ class Crop(object):
         if pad_h > 0 or pad_w > 0:
             # 裁剪 True-False 掩码
             mask = mask[:, :, h_off: h_off + self.crop_h, w_off: w_off + self.crop_w]
+        else:
+            mask = torch.zeros_like(label, dtype=torch.bool)
 
         return image, label, mask
 
@@ -517,7 +522,7 @@ def generate_class_mask(pseudo_labels):
     return mask.float()
 
 
-def generate_unsup_data(data, logits, feats, target, gt_label=None, mode="cutout"):
+def generate_unsup_data(data, logits, feats, target, mask, gt_label=None, mode="cutout"):
     batch_size, _, im_h, im_w = data.shape
     _, _, h_t, w_t = feats.shape
     device = data.device
@@ -528,6 +533,7 @@ def generate_unsup_data(data, logits, feats, target, gt_label=None, mode="cutout
     new_feat = []
     if gt_label is not None:
         new_label = []
+    new_mask = []
     for i in range(batch_size):
         if mode == "cutout":
             mix_mask = generate_cutout_mask([im_h, im_w], ratio=2).to(device)
@@ -559,6 +565,11 @@ def generate_unsup_data(data, logits, feats, target, gt_label=None, mode="cutout
                     gt_label[i] * mix_mask + gt_label[(i + 1) % batch_size] * (1 - mix_mask)
                 ).unsqueeze(0)
             )
+        new_mask.append(
+            (
+                mask[i] * mix_mask + mask[(i + 1) % batch_size] * (1 - mix_mask)
+            ).bool().unsqueeze(0)
+        )
         new_logits.append(
             (
                     logits[i] * mix_mask + logits[(i + 1) % batch_size] * (1 - mix_mask)
@@ -570,11 +581,12 @@ def generate_unsup_data(data, logits, feats, target, gt_label=None, mode="cutout
             ).unsqueeze(0)
         )
 
-    new_data, new_target, new_logits, new_feat = (
+    new_data, new_target, new_logits, new_feat, new_mask = (
         torch.cat(new_data), torch.cat(new_target),
-        torch.cat(new_logits), torch.cat(new_feat)
+        torch.cat(new_logits), torch.cat(new_feat),
+        torch.cat(new_mask)
     )
     if gt_label is not None:
         new_label = torch.cat(new_label)
-        return new_data, new_logits, new_feat, new_target.long(), new_label.long()
-    return new_data, new_logits, new_feat, new_target.long()
+        return new_data, new_logits, new_feat, new_target.long(), new_mask, new_label.long()
+    return new_data, new_logits, new_feat, new_target.long(), new_mask

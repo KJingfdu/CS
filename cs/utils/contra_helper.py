@@ -381,7 +381,7 @@ class MocoContrastLoss(nn.Module):
             return None
         anchor_count = feats.shape[0]
         device = feats.device
-        if anchor_count > 1000:
+        if anchor_count > 1200:
             feats = feats.cpu()
             feats_t = feats_t.cpu()
             labels = labels.cpu()
@@ -436,7 +436,7 @@ class MocoContrastLoss(nn.Module):
         nan_mask = torch.isnan(loss)
         loss = loss[~nan_mask]
         loss = loss.mean()
-        if anchor_count > 1000:
+        if anchor_count > 1200:
             loss = loss.to(real_device)
         return loss
 
@@ -456,11 +456,11 @@ class MocoContrastLoss(nn.Module):
         feats_t = feats_t.permute(0, 2, 3, 1)
         # memory_bank_use = self.memory_bank is not None and len(self.memory_bank) > 0
         if unlabeled and gtlabels is not None:
-            feats_, feats_t_, labels_, gtlabels_ = self._mid_sampling(feats, feats_t, labels, predict, unlabeled,
+            feats_, feats_t_, labels_, gtlabels_ = self._sampling(feats, feats_t, labels, predict, unlabeled,
                                                                       gt_y=gtlabels)
             self.eval_bank.add(labels_, gtlabels_)
         else:
-            feats_, feats_t_, labels_ = self._mid_sampling(feats, feats_t, labels, predict, unlabeled)
+            feats_, feats_t_, labels_ = self._sampling(feats, feats_t, labels, predict, unlabeled)
         if feats_.shape[0] == 0:
             loss = 0 * feats.sum()
             return loss

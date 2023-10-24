@@ -30,7 +30,7 @@ def compute_rce_loss(predict, target):
     return rce.sum() / (target != 255).sum()
 
 
-def compute_unsupervised_loss(predict, target, percent, pred_teacher):
+def compute_unsupervised_loss(predict, target, percent, pred_teacher, mask=None):
     batch_size, num_class, h, w = predict.shape
 
     with torch.no_grad():
@@ -46,9 +46,12 @@ def compute_unsupervised_loss(predict, target, percent, pred_teacher):
         target[thresh_mask] = 255
         weight = batch_size * h * w / torch.sum(target != 255)
 
+    if mask is not None:
+        target[mask] = 255
+
     loss = weight * F.cross_entropy(predict, target, ignore_index=255)  # [10, 321, 321]
 
-    return loss
+    return loss, target
 
 
 def compute_contra_memobank_loss(

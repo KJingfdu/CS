@@ -335,14 +335,15 @@ def train(
         learning_rates.update(lr[0])
         lr_scheduler.step()
 
-        image_l, label_l = loader_l_iter.next()
+        image_l, label_l, _ = loader_l_iter.next()
         batch_size, h, w = label_l.size()
         image_l, label_l = image_l.cuda(), label_l.cuda()
 
         # image_u, _ = loader_u_iter.next()
-        image_u, label_u = loader_u_iter.next()   # 用来eval separation-driven sampling的准确率
+        image_u, label_u, mask_u = loader_u_iter.next()   # 用来eval separation-driven sampling的准确率
         image_u = image_u.cuda()
         label_u = label_u.cuda()
+        mask_u = mask_u.cuda()
 
         if epoch < cfg["trainer"].get("sup_only_epoch", 1):
             contra_flag = "none"
@@ -387,15 +388,17 @@ def train(
             if np.random.uniform(0, 1) < 1 and cfg["trainer"]["unsupervised"].get(
                     "apply_aug", False
             ):
-                image_u_aug, logits_u_aug, rep_u_t_aug, label_u_aug, label_u_gt = generate_unsup_data(
+                image_u_aug, logits_u_aug, rep_u_t_aug, label_u_aug, mask_u_aug, label_u_gt = generate_unsup_data(
                     image_u,
                     logits_u_aug.clone(),
                     rep_u_teacher.clone(),
                     label_u_aug.clone(),
+                    mask_u,
                     gt_label=label_u.clone(),
                     mode=cfg["trainer"]["unsupervised"]["apply_aug"],
                 )
             else:
+                mask_u_aug = mask_u
                 rep_u_t_aug = rep_u_teacher
                 image_u_aug = image_u
 
@@ -441,12 +444,13 @@ def train(
                 drop_percent = cfg["trainer"]["unsupervised"].get("drop_percent", 100)
                 percent_unreliable = (100 - drop_percent) * (1 - epoch / cfg["trainer"]["epochs"])
                 drop_percent = 100 - percent_unreliable
-                unsup_loss = (
+                unsup_loss, pseudo_u_aug = (
                         compute_unsupervised_loss(
                             pred_u_large,
                             label_u_aug.clone(),
                             drop_percent,
                             pred_u_large_teacher.detach(),
+                            mask=mask_u_aug,
                         )
                         * cfg["trainer"]["unsupervised"].get("loss_weight", 1)
                 )
@@ -573,10 +577,11 @@ def train(
                     contra_loss = contra_loss_fn(torch.nn.functional.normalize(rep_all[:num_labeled], dim=1),
                                                  torch.nn.functional.normalize(rep_all_teacher[:num_labeled], dim=1),
                                                  torch.cat([label_l, label_u_aug])[:num_labeled],
-                                                 predict_label[:num_labeled]) * weight
+                                                 predict_label[:num_labeled],
+                                                 unlabeled=False) * weight
                     contra_loss += contra_loss_fn(torch.nn.functional.normalize(rep_all[num_labeled:], dim=1),
                                                   torch.nn.functional.normalize(rep_all_teacher[num_labeled:], dim=1),
-                                                  torch.cat([label_l, label_u_aug])[num_labeled:],
+                                                  pseudo_u_aug,
                                                   predict_label[num_labeled:],
                                                   unlabeled=True,
                                                   gtlabels=label_u_gt) * weight
@@ -709,7 +714,7 @@ def validate(
     union_meter = AverageMeter()
 
     for step, batch in enumerate(data_loader):
-        images, labels = batch
+        images, labels, _ = batch
         images = images.cuda()
         labels = labels.long().cuda()
 
