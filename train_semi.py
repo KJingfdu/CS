@@ -444,7 +444,7 @@ def train(
                 drop_percent = cfg["trainer"]["unsupervised"].get("drop_percent", 100)
                 percent_unreliable = (100 - drop_percent) * (1 - epoch / cfg["trainer"]["epochs"])
                 drop_percent = 100 - percent_unreliable
-                unsup_loss, pseudo_u_aug = (
+                unsup_loss = (
                         compute_unsupervised_loss(
                             pred_u_large,
                             label_u_aug.clone(),
@@ -579,9 +579,10 @@ def train(
                                                  torch.cat([label_l, label_u_aug])[:num_labeled],
                                                  predict_label[:num_labeled],
                                                  unlabeled=False) * weight
+                    label_u_aug[mask_u_aug] = 255
                     contra_loss += contra_loss_fn(torch.nn.functional.normalize(rep_all[num_labeled:], dim=1),
                                                   torch.nn.functional.normalize(rep_all_teacher[num_labeled:], dim=1),
-                                                  pseudo_u_aug,
+                                                  label_u_aug,
                                                   predict_label[num_labeled:],
                                                   unlabeled=True,
                                                   gtlabels=label_u_gt) * weight

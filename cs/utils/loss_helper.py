@@ -51,7 +51,7 @@ def compute_unsupervised_loss(predict, target, percent, pred_teacher, mask=None)
 
     loss = weight * F.cross_entropy(predict, target, ignore_index=255)  # [10, 321, 321]
 
-    return loss, target
+    return loss
 
 
 def compute_contra_memobank_loss(
