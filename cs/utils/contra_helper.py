@@ -82,20 +82,24 @@ class MocoContrastLoss(nn.Module):
     def _area_sampling(self, X, X_t, y_hat, y, unlabeled=True, gt_y=None):
         batch_size = X.shape[0]
         feat_dim = X.shape[-1]
-        if not unlabeled:
-            y_hat = y
         X_ = torch.empty((0, feat_dim)).cuda()
         X_t_ = torch.empty((0, feat_dim)).cuda()
         y_ = torch.empty(0).cuda()
         Y_ = torch.empty(0).cuda()
-        # filter each image, to find what class they have num > self.max_view pixel
         for ii in range(batch_size):
-            this_y = y_hat[ii]
+            this_y = y[ii]
+            # 根据student model预测出的y进行mask的挑选,进而挑选hard-easy sample.
+            this_y_s = y_hat[ii]
+            # 图片中存在255的部分, 因为采样是根据预测结果进行的, 很可能会涉及255的部分
+            ignore_mask = (this_y_s == 255)
             this_X = X[ii]
             this_X_t = X_t[ii]
             this_y_ids = this_y.unique()
             this_y_ids = [i for i in this_y_ids if not i == 255]
             edge_mask, interior_mask = edge_interior(this_y)
+            # ignore的部分不予采样
+            edge_mask[ignore_mask] == 0
+            interior_mask[ignore_mask] == 0
             num_edge = [int(mask.sum()) for mask in edge_mask]
             num_interior = [int(mask.sum()) for mask in interior_mask]
             n_view = self.max_views[0]
@@ -120,8 +124,7 @@ class MocoContrastLoss(nn.Module):
                 random_id = perm[:num_keep]
                 X_t_ = torch.cat((X_t_, this_X_t[edge_mask[id]][random_id, :]), dim=0)
                 X_ = torch.cat((X_, this_X[edge_mask[id]][random_id, :]), dim=0)
-                Y = torch.ones(num_keep).cuda() * value
-                y_ = torch.cat((y_, Y))
+                y_ = torch.cat((y_, this_y_s[edge_mask[id]][random_id, :]))
                 if gt_y is not None and unlabeled:
                     this_y = gt_y[ii]
                     Y_ = torch.cat((Y_, this_y[edge_mask[id]][random_id]))
@@ -973,7 +976,7 @@ class EvalFeat:
         return accuracy
 
 
-def edge_interior(label_mask: torch.Tensor, min_k=3, max_k=5, pow=3):
+def edge_interior(label_mask: torch.Tensor, min_k=3, max_k=5, pow=3, edge=5):
     device = label_mask.device
     label_mask = label_mask.cpu().numpy()
     label_unique = np.unique(label_mask)
@@ -995,6 +998,8 @@ def edge_interior(label_mask: torch.Tensor, min_k=3, max_k=5, pow=3):
         # mask_dilate = cv2.dilate(mask_eq, kernel) - mask_eq
         mask_inter = cv2.erode(mask_eq, kernel)
         mask_edge = mask_eq - mask_inter
+        mask_inter[:edge, :], mask_inter[-edge:, :], mask_inter[:, :edge], mask_inter[:, -edge:] = 0, 0, 0, 0
+        mask_edge[:edge, :], mask_edge[-edge:, :], mask_edge[:, :edge], mask_edge[:, -edge:] = 0, 0, 0, 0
         mask_edge = torch.from_numpy(mask_edge.astype('int32')).to(device).bool()
         mask_inter = torch.from_numpy(mask_inter.astype('int32')).to(device).bool()
         mask_edges.append(mask_edge)
