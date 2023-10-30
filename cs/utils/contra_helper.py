@@ -98,8 +98,8 @@ class MocoContrastLoss(nn.Module):
             this_y_ids = [i for i in this_y_ids if not i == 255]
             edge_mask, interior_mask = edge_interior(this_y)
             # ignore的部分不予采样
-            edge_mask[ignore_mask] == 0
-            interior_mask[ignore_mask] == 0
+            edge_mask[ignore_mask] == False
+            interior_mask[ignore_mask] == False
             num_edge = [int(mask.sum()) for mask in edge_mask]
             num_interior = [int(mask.sum()) for mask in interior_mask]
             n_view = self.max_views[0]
@@ -976,9 +976,10 @@ class EvalFeat:
         return accuracy
 
 
-def edge_interior(label_mask: torch.Tensor, min_k=3, max_k=5, pow=3, edge=5):
+def edge_interior(label_mask: torch.Tensor, ignore_mask:torch.Tensor, min_k=3, max_k=5, pow=3, edge=5):
     device = label_mask.device
     label_mask = label_mask.cpu().numpy()
+    ignore_mask = ignore_mask.cpu().numpy()
     label_unique = np.unique(label_mask)
     label_areas = {label: (np.sum(label_mask == label)) ** (1 / pow) for label in label_unique}
     min_area = min(label_areas.values())
@@ -1000,6 +1001,8 @@ def edge_interior(label_mask: torch.Tensor, min_k=3, max_k=5, pow=3, edge=5):
         mask_edge = mask_eq - mask_inter
         mask_inter[:edge, :], mask_inter[-edge:, :], mask_inter[:, :edge], mask_inter[:, -edge:] = 0, 0, 0, 0
         mask_edge[:edge, :], mask_edge[-edge:, :], mask_edge[:, :edge], mask_edge[:, -edge:] = 0, 0, 0, 0
+        mask_inter[ignore_mask] = 0
+        mask_edge[ignore_mask] = 0
         mask_edge = torch.from_numpy(mask_edge.astype('int32')).to(device).bool()
         mask_inter = torch.from_numpy(mask_inter.astype('int32')).to(device).bool()
         mask_edges.append(mask_edge)
