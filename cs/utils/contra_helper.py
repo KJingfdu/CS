@@ -96,10 +96,8 @@ class MocoContrastLoss(nn.Module):
             this_X_t = X_t[ii]
             this_y_ids = this_y.unique()
             this_y_ids = [i for i in this_y_ids if not i == 255]
-            edge_mask, interior_mask = edge_interior(this_y)
+            edge_mask, interior_mask = edge_interior(this_y, ignore_mask)
             # ignore的部分不予采样
-            edge_mask[ignore_mask] == False
-            interior_mask[ignore_mask] == False
             num_edge = [int(mask.sum()) for mask in edge_mask]
             num_interior = [int(mask.sum()) for mask in interior_mask]
             n_view = self.max_views[0]
@@ -124,7 +122,7 @@ class MocoContrastLoss(nn.Module):
                 random_id = perm[:num_keep]
                 X_t_ = torch.cat((X_t_, this_X_t[edge_mask[id]][random_id, :]), dim=0)
                 X_ = torch.cat((X_, this_X[edge_mask[id]][random_id, :]), dim=0)
-                y_ = torch.cat((y_, this_y_s[edge_mask[id]][random_id, :]))
+                y_ = torch.cat((y_, this_y_s[edge_mask[id]][random_id]))
                 if gt_y is not None and unlabeled:
                     this_y = gt_y[ii]
                     Y_ = torch.cat((Y_, this_y[edge_mask[id]][random_id]))
@@ -137,8 +135,7 @@ class MocoContrastLoss(nn.Module):
                 random_id = perm[:num_keep]
                 X_t_ = torch.cat((X_t_, this_X_t[interior_mask[id]][random_id, :]), dim=0)
                 X_ = torch.cat((X_, this_X[interior_mask[id]][random_id, :]), dim=0)
-                Y = torch.ones(num_keep).cuda() * value
-                y_ = torch.cat((y_, Y))
+                y_ = torch.cat((y_, this_y_s[interior_mask[id]][random_id]))
                 if gt_y is not None and unlabeled:
                     this_y = gt_y[ii]
                     Y_ = torch.cat((Y_, this_y[interior_mask[id]][random_id]))
