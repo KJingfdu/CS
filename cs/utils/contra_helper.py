@@ -15,7 +15,7 @@ class MocoContrastLoss(nn.Module):
                  memory_size=2000, small_area=True,
                  feat_dim=256, max_positive=False,
                  device='cpu', ignore_label=255,
-                 eval_feat=True):
+                 eval_feat=True, end_iter=2 ** 19):
         super(MocoContrastLoss, self).__init__()
         self.temperature = temperature
         self.max_positive = max_positive
@@ -25,6 +25,10 @@ class MocoContrastLoss(nn.Module):
         self.max_samples = int(neg_num * nclass)
         self.max_views = [neg_num for _ in range(nclass)]
         self.small_area = small_area
+        self.now_iter = -1
+        self.end_iter = 2 * end_iter
+        self.k_min = 5
+        self.k_max = 100
         if memory_bank:
             self.memory_bank = MoCoMemoryBank(nclass, memory_size, pixel_update_freq, feat_dim, device)
             self.use_sds = False
@@ -320,7 +324,7 @@ class MocoContrastLoss(nn.Module):
 
         return loss
 
-    def _contrastive_memory_bank(self, feats, feats_t, labels):
+    def _contrastive_memory_bank(self, feats, feats_t, labels, TopK=5, unlabeled=False):
         # 解释代码中的anchor_count和contrast_count
         # 原始代码来自于ContrastiveSeg库。 2021ICCV
         # 由于源代码在选取hard特征时，是选取了每个类别固定长度n_view个点的特征，其标签都被定义为一个数值。所以后续需要repeat。
@@ -354,9 +358,9 @@ class MocoContrastLoss(nn.Module):
         neg_mask = 1 - mask
         # if not memory_bank_use:
         # 跟自己的对比损失没必要计算
-        logits_mask = torch.ones_like(mask).scatter_(1, torch.arange(anchor_count).view(-1, 1).to(device), 0)
+        # logits_mask = torch.ones_like(mask).scatter_(1, torch.arange(anchor_count).view(-1, 1).to(device), 0)
         # 这个mask是计算i与i+的关键部分。
-        mask = mask * logits_mask
+        # mask = mask * logits_mask
         if memory_bank_use:
             mask_que = torch.eq(labels, torch.transpose(contrast_labels_que, 0, 1)).float().to(device)
             neg_mask_que = 1 - mask_que
@@ -375,7 +379,14 @@ class MocoContrastLoss(nn.Module):
         if self.max_positive:
             logits_calmax = logits.masked_fill(~mask.bool(), -1 * 2 / self.temperature)
             # logits_topn = logits_calmax.max(dim=1).values.unsqueeze(1)
-            logits_topn, _ = torch.topk(logits_calmax, k=3, dim=1)
+            logits_topn, _ = torch.topk(logits_calmax, k=TopK, dim=1)
+            if unlabeled:
+                topn_sum = logits_topn.sum(dim=1)
+                sum_mean = topn_sum.mean()
+                sum_std = torch.std(topn_sum, unbiased=False)
+                mask_err = topn_sum < sum_mean - 2 * sum_std
+                logits_topn = logits_topn[~mask_err]
+                neg_logits = neg_logits[~mask_err]
             log_prob = logits_topn - torch.log(torch.exp(logits_topn) + neg_logits)
             loss = - (self.temperature / self.base_temperature) * log_prob
         else:
@@ -389,6 +400,8 @@ class MocoContrastLoss(nn.Module):
         return loss
 
     def forward(self, feats, feats_t, labels, predict, unlabeled=True, gtlabels=None):
+        self.now_iter += 1
+        TopK = int(math.ceil((self.now_iter / self.end_iter) * (self.k_max - self.k_min)) + self.k_min)
         batchsize, _, h, w = feats.shape
         labels = labels.unsqueeze(1).float().clone()
         labels = torch.nn.functional.interpolate(labels, (feats.shape[2], feats.shape[3]), mode='nearest')
@@ -413,7 +426,7 @@ class MocoContrastLoss(nn.Module):
             loss = 0 * feats.sum()
             return loss
         if self.memory_bank is not None:
-            loss = self._contrastive_memory_bank(feats_, feats_t_, labels_)
+            loss = self._contrastive_memory_bank(feats_, feats_t_, labels_, TopK=TopK, unlabeled=unlabeled)
         else:
             loss = self._contrastive(feats_, labels_)
         with torch.no_grad():

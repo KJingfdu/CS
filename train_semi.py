@@ -104,16 +104,17 @@ def main():
 
     model.cuda()
 
-    sup_loss_fn = get_criterion(cfg)
-    if not cfg["trainer"]["contrastive"].get('method', 'u2pl') == 'u2pl':
-        contra_loss_fn = get_contra_loss(cfg, 'cuda')
-
     train_loader_sup, train_loader_unsup, val_loader = get_loader(cfg, seed=seed)
+    sup_loss_fn = get_criterion(cfg)
 
     # Optimizer and lr decay scheduler
     cfg_trainer = cfg["trainer"]
     cfg_optim = cfg_trainer["optimizer"]
     times = 10 if "pascal" in cfg["dataset"]["type"] else 1
+    total_iters = cfg_trainer["epochs"] * len(train_loader_sup)
+    if not cfg["trainer"]["contrastive"].get('method', 'u2pl') == 'u2pl':
+        contra_loss_fn = get_contra_loss(cfg, device='cuda', end_iter=total_iters)
+
     # times = 10
 
     params_list = []
@@ -196,7 +197,7 @@ def main():
             )
         ).cuda()
 
-    total_iters = cfg_trainer["epochs"] * len(train_loader_sup)
+
     global unlabeled_filter
     unlabeled_filter = UnlabelFilter(total_iters)
 
