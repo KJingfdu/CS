@@ -28,7 +28,7 @@ class MocoContrastLoss(nn.Module):
         self.now_iter = -1
         self.end_iter = 2 * end_iter
         self.k_min = 5
-        self.k_max = 100
+        self.k_max = 50
         if memory_bank:
             self.memory_bank = MoCoMemoryBank(nclass, memory_size, pixel_update_freq, feat_dim, device)
             self.use_sds = False
@@ -36,6 +36,7 @@ class MocoContrastLoss(nn.Module):
             self.memory_bank = None
         if eval_feat:
             self.eval_bank = EvalFeat()
+            self.eval_bank_2 = EvalFeat()
 
     def _random_sampling(self, X, X_t, y_hat, y, unlabeled=True, gt_y=None):
         batch_size = X.shape[0]
@@ -390,6 +391,7 @@ class MocoContrastLoss(nn.Module):
         # 原始代码来自于ContrastiveSeg库。 2021ICCV
         # 由于源代码在选取hard特征时，是选取了每个类别固定长度n_view个点的特征，其标签都被定义为一个数值。所以后续需要repeat。
         # 然而在保存各个类别的特征及其sampling时，得出的特征和类别信息一一对应，不需要repeat，所以count为1
+        outs = {}
         if feats is None:
             return None
         anchor_count = feats.shape[0]
@@ -448,6 +450,7 @@ class MocoContrastLoss(nn.Module):
                 mask_err = topn_sum < sum_mean - 2 * sum_std
                 logits_topn = logits_topn[~mask_err]
                 neg_logits = neg_logits[~mask_err]
+                outs['mask'] = mask_err
             log_prob = logits_topn - torch.log(torch.exp(logits_topn) + neg_logits)
             loss = - (self.temperature / self.base_temperature) * log_prob
         else:
@@ -458,6 +461,7 @@ class MocoContrastLoss(nn.Module):
         loss = loss.mean()
         # if anchor_count > 1200:
         #     loss = loss.to(real_device)
+        outs['loss'] = loss
         return loss
 
     def forward(self, feats, feats_t, labels, predict, unlabeled=True, gtlabels=None):
@@ -487,7 +491,11 @@ class MocoContrastLoss(nn.Module):
             loss = 0 * feats.sum()
             return loss
         if self.memory_bank is not None:
-            loss = self._contrastive_memory_bank(feats_, feats_t_, labels_, TopK=TopK, unlabeled=unlabeled)
+            outs = self._contrastive_memory_bank(feats_, feats_t_, labels_, TopK=TopK, unlabeled=unlabeled)
+            loss = outs['loss']
+            if unlabeled and gtlabels is not None:
+                mask_err = outs['mask']
+                self.eval_bank_2.add(labels_[mask_err], gtlabels_[mask_err])
         else:
             loss = self._contrastive(feats_, labels_)
         with torch.no_grad():

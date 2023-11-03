@@ -2,7 +2,7 @@ dist: False
 dataset: # Required.
   type: cityscapes_semi
   train:
-    data_root: ./data/cityscapes
+    data_root: F:/dataset/cityscapes
     data_list: ./data/splits/cityscapes/372/labeled.txt
     flip: True
     GaussianBlur: False
@@ -12,7 +12,7 @@ dataset: # Required.
       type: rand
       size: [640, 640] # crop image with HxW size
   val:
-    data_root: ./data/cityscapes
+    data_root: F:/dataset/cityscapes
     data_list: ./data/splits/cityscapes/val.txt
     crop:
       type: center
