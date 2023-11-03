@@ -1,5 +1,5 @@
 import time
-
+from PIL import Image
 import numpy as np
 import math
 import cv2
@@ -84,7 +84,68 @@ class MocoContrastLoss(nn.Module):
         return X_, X_t_, y_
 
     def _area_sampling(self, X, X_t, y_hat, y, unlabeled=True, gt_y=None):
-        return 0
+        batch_size = X.shape[0]
+        feat_dim = X.shape[-1]
+        X_ = torch.empty((0, feat_dim)).cuda()
+        X_t_ = torch.empty((0, feat_dim)).cuda()
+        y_ = torch.empty(0).cuda()
+        Y_ = torch.empty(0).cuda()
+        for ii in range(batch_size):
+            this_y = y[ii]
+            # 根据student model预测出的y进行mask的挑选,进而挑选hard-easy sample.
+            this_y_s = y_hat[ii]
+            # 图片中存在255的部分, 因为采样是根据预测结果进行的, 很可能会涉及255的部分
+            ignore_mask = (this_y_s == 255)
+            this_X = X[ii]
+            this_X_t = X_t[ii]
+            this_y_ids = this_y.unique()
+            this_y_ids = [i for i in this_y_ids if not i == 255]
+            edge_mask, interior_mask = edge_interior(this_y, ignore_mask)
+            # ignore的部分不予采样
+            num_edge = [int(mask.sum()) for mask in edge_mask]
+            num_interior = [int(mask.sum()) for mask in interior_mask]
+            n_view = self.max_views[0]
+            for id in range(len(num_edge)):
+                edge = num_edge[id]
+                interior = num_interior[id]
+                if edge >= n_view / 2 and interior >= n_view / 2:
+                    num_edge[id] = n_view // 2
+                    num_interior[id] = n_view - num_edge[id]
+                elif edge + interior >= n_view and interior < n_view / 2:
+                    num_interior[id] = interior
+                    num_edge[id] = n_view - num_interior[id]
+                elif edge + interior >= n_view and edge < n_view / 2:
+                    num_edge[id] = edge
+                    num_interior[id] = n_view - num_edge[id]
+            for id, value in enumerate(this_y_ids):
+                num_all = edge_mask[id].int().sum()
+                if num_all <= 0:
+                    continue
+                num_keep = num_edge[id]
+                perm = torch.randperm(num_all)
+                random_id = perm[:num_keep]
+                X_t_ = torch.cat((X_t_, this_X_t[edge_mask[id]][random_id, :]), dim=0)
+                X_ = torch.cat((X_, this_X[edge_mask[id]][random_id, :]), dim=0)
+                y_ = torch.cat((y_, this_y_s[edge_mask[id]][random_id]))
+                if gt_y is not None and unlabeled:
+                    this_y = gt_y[ii]
+                    Y_ = torch.cat((Y_, this_y[edge_mask[id]][random_id]))
+
+                num_all = interior_mask[id].int().sum()
+                if num_all <= 0:
+                    continue
+                num_keep = num_interior[id]
+                perm = torch.randperm(num_all)
+                random_id = perm[:num_keep]
+                X_t_ = torch.cat((X_t_, this_X_t[interior_mask[id]][random_id, :]), dim=0)
+                X_ = torch.cat((X_, this_X[interior_mask[id]][random_id, :]), dim=0)
+                y_ = torch.cat((y_, this_y_s[interior_mask[id]][random_id]))
+                if gt_y is not None and unlabeled:
+                    this_y = gt_y[ii]
+                    Y_ = torch.cat((Y_, this_y[interior_mask[id]][random_id]))
+        if gt_y is not None and unlabeled:
+            return X_, X_t_, y_, Y_
+        return X_, X_t_, y_
 
     def _mid_sampling(self, X, X_t, y_hat, y, unlabeled=True, gt_y=None, decay=0.5):
         batch_size = X.shape[0]
@@ -417,11 +478,11 @@ class MocoContrastLoss(nn.Module):
         feats_t = feats_t.permute(0, 2, 3, 1)
         # memory_bank_use = self.memory_bank is not None and len(self.memory_bank) > 0
         if unlabeled and gtlabels is not None:
-            feats_, feats_t_, labels_, gtlabels_ = self._random_sampling(feats, feats_t, labels, predict, unlabeled,
-                                                                         gt_y=gtlabels)
+            feats_, feats_t_, labels_, gtlabels_ = self._area_sampling(feats, feats_t, labels, predict, unlabeled,
+                                                                       gt_y=gtlabels)
             self.eval_bank.add(labels_, gtlabels_)
         else:
-            feats_, feats_t_, labels_ = self._random_sampling(feats, feats_t, labels, predict, unlabeled)
+            feats_, feats_t_, labels_ = self._area_sampling(feats, feats_t, labels, predict, unlabeled)
         if feats_.shape[0] == 0:
             loss = 0 * feats.sum()
             return loss
@@ -923,3 +984,68 @@ class EvalFeat:
         self.all = 0
         self.right = 0
         return accuracy
+
+
+def edge_interior(label_mask: torch.Tensor, ignore_mask:torch.Tensor, min_k=3, max_k=5, pow=3, edge=5):
+    device = label_mask.device
+    label_mask = label_mask.cpu().numpy()
+    ignore_mask = ignore_mask.cpu().numpy()
+    label_unique = np.unique(label_mask)
+    label_areas = {label: (np.sum(label_mask == label)) ** (1 / pow) for label in label_unique}
+    min_area = min(label_areas.values())
+    max_area = max(label_areas.values())
+    mask_edges = []
+    mask_inters = []
+    for idx, label in enumerate(label_unique):
+        if label == 255:
+            continue
+        if len(label_unique) == 1:
+            k = min_k
+        else:
+            norm_area = (max_area - label_areas[label]) / (max_area - min_area)
+            k = int(min_k + norm_area * (max_k - min_k))
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+        mask_eq = (label_mask == label).astype('uint8')
+        # mask_dilate = cv2.dilate(mask_eq, kernel) - mask_eq
+        mask_inter = cv2.erode(mask_eq, kernel)
+        mask_edge = mask_eq - mask_inter
+        mask_inter[:edge, :], mask_inter[-edge:, :], mask_inter[:, :edge], mask_inter[:, -edge:] = 0, 0, 0, 0
+        mask_edge[:edge, :], mask_edge[-edge:, :], mask_edge[:, :edge], mask_edge[:, -edge:] = 0, 0, 0, 0
+        mask_inter[ignore_mask] = 0
+        mask_edge[ignore_mask] = 0
+        mask_edge = torch.from_numpy(mask_edge.astype('int32')).to(device).bool()
+        mask_inter = torch.from_numpy(mask_inter.astype('int32')).to(device).bool()
+        mask_edges.append(mask_edge)
+        mask_inters.append(mask_inter)
+
+    return mask_edges, mask_inters
+
+
+def plot_color(tensor):
+    gray_array = tensor.cpu().numpy()
+    color_mapping = [
+        [128, 64, 128],
+        [244, 35, 232],
+        [70, 70, 70],
+        [102, 102, 156],
+        [190, 153, 153],
+        [153, 153, 153],
+        [250, 170, 30],
+        [220, 220, 0],
+        [107, 142, 35],
+        [152, 251, 152],
+        [70, 130, 180],
+        [220, 20, 60],
+        [255, 0, 0],
+        [0, 0, 142],
+        [0, 0, 70],
+        [0, 60, 100],
+        [0, 80, 100],
+        [0, 0, 230],
+        [119, 11, 32]
+    ]
+    color_map = np.array(color_mapping)
+    gray_array[gray_array == 255] = 0
+    color_image = color_map[gray_array]
+    color_image = Image.fromarray(color_image.astype('uint8'))
+    color_image.save('./result.png')
