@@ -447,7 +447,7 @@ class MocoContrastLoss(nn.Module):
                 topn_sum = logits_topn.sum(dim=1)
                 sum_mean = topn_sum.mean()
                 sum_std = torch.std(topn_sum, unbiased=False)
-                mask_err = topn_sum < sum_mean - 2 * sum_std
+                mask_err = topn_sum < sum_mean - 3 * sum_std
                 logits_topn = logits_topn[~mask_err]
                 neg_logits = neg_logits[~mask_err]
                 outs['mask'] = mask_err
@@ -462,7 +462,7 @@ class MocoContrastLoss(nn.Module):
         # if anchor_count > 1200:
         #     loss = loss.to(real_device)
         outs['loss'] = loss
-        return loss
+        return outs
 
     def forward(self, feats, feats_t, labels, predict, unlabeled=True, gtlabels=None):
         self.now_iter += 1
