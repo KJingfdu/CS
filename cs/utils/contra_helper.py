@@ -476,6 +476,7 @@ class MocoContrastLoss(nn.Module):
         return outs
 
     def forward(self, feats, feats_t, labels, predict, unlabeled=True, gtlabels=None):
+        outs = {}
         batchsize, _, h, w = feats.shape
         labels = labels.unsqueeze(1).float().clone()
         labels = torch.nn.functional.interpolate(labels, (feats.shape[2], feats.shape[3]), mode='nearest')
@@ -497,22 +498,22 @@ class MocoContrastLoss(nn.Module):
         else:
             feats_, feats_t_, labels_ = self._random_sampling(feats, feats_t, labels, predict, unlabeled)
         if feats_.shape[0] == 0:
-            loss = 0 * feats.sum()
-            return loss
+            outs['loss'] = 0 * feats.sum()
+            return outs
         if self.memory_bank is not None:
             outs = self._contrastive_memory_bank(feats_, feats_t_, labels_, unlabeled=unlabeled)
-            loss = outs['loss']
+            # loss = outs['loss']
             # if unlabeled and gtlabels is not None:
             #     mask_err = outs['mask']
             #     self.eval_bank_2.add(labels_[mask_err], gtlabels_[mask_err])
         else:
-            loss = self._contrastive(feats_, labels_)
+            outs['loss'] = self._contrastive(feats_, labels_)
         with torch.no_grad():
             if self.memory_bank is not None:
                 sperate_ratio, self.use_sds = self.memory_bank.random_dequeue_enqueue(feats_t, labels, unlabeled)
                 if self.memory_bank.best_ratio > sperate_ratio:
                     self.memory_bank.best_ratio = sperate_ratio
-        return loss
+        return outs
 
 
 class MoCoMemoryBank:

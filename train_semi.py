@@ -321,6 +321,8 @@ def train(
     sup_losses = AverageMeter(10)
     uns_losses = AverageMeter(10)
     con_losses = AverageMeter(10)
+    con_losses_1 = AverageMeter(10)
+    con_losses_2 = AverageMeter(10)
     data_times = AverageMeter(10)
     batch_times = AverageMeter(10)
     learning_rates = AverageMeter(10)
@@ -575,18 +577,32 @@ def train(
                 else:
                     weight = cfg["trainer"]["contrastive"].get("loss_weight", 1)
                     _, predict_label = torch.max(pred_all, dim=1)
-                    contra_loss = contra_loss_fn(torch.nn.functional.normalize(rep_all[:num_labeled], dim=1),
-                                                 torch.nn.functional.normalize(rep_all_teacher[:num_labeled], dim=1),
-                                                 torch.cat([label_l, label_u_aug])[:num_labeled],
-                                                 predict_label[:num_labeled],
-                                                 unlabeled=False) * weight
+                    contra_loss_outs = contra_loss_fn(torch.nn.functional.normalize(rep_all[:num_labeled], dim=1),
+                                                      torch.nn.functional.normalize(rep_all_teacher[:num_labeled], dim=1),
+                                                      torch.cat([label_l, label_u_aug])[:num_labeled],
+                                                      predict_label[:num_labeled],
+                                                      unlabeled=False)
+                    contra_loss = contra_loss_outs['loss'] * weight
+                    try:
+                        contra_loss1 = contra_loss_outs['loss1'] * weight
+                        contra_loss2 = contra_loss_outs['loss2'] * weight
+                    except:
+                        contra_loss1 = 0
+                        contra_loss2 = 0
                     label_u_aug[mask_u_aug] = 255
-                    contra_loss += contra_loss_fn(torch.nn.functional.normalize(rep_all[num_labeled:], dim=1),
-                                                  torch.nn.functional.normalize(rep_all_teacher[num_labeled:], dim=1),
-                                                  label_u_aug,
-                                                  predict_label[num_labeled:],
-                                                  unlabeled=True,
-                                                  gtlabels=label_u_gt) * weight
+                    contra_loss_outs = contra_loss_fn(torch.nn.functional.normalize(rep_all[num_labeled:], dim=1),
+                                                      torch.nn.functional.normalize(rep_all_teacher[num_labeled:], dim=1),
+                                                      label_u_aug,
+                                                      predict_label[num_labeled:],
+                                                      unlabeled=True,
+                                                      gtlabels=label_u_gt)
+                    try:
+                        contra_loss1 += contra_loss_outs['loss1'] * weight
+                        contra_loss2 += contra_loss_outs['loss2'] * weight
+                    except:
+                        contra_loss1 = 0
+                        contra_loss2 = 0
+                    contra_loss += contra_loss_outs['loss'] * weight
             else:
                 contra_loss = 0 * rep_all.sum()
 
@@ -629,6 +645,14 @@ def train(
         # dist.all_reduce(reduced_con_loss)
         con_losses.update(reduced_con_loss.item())
 
+        reduced_con_loss_1 = contra_loss1.clone().detach()
+        # dist.all_reduce(reduced_con_loss)
+        con_losses_1.update(reduced_con_loss_1.item())
+
+        reduced_con_loss_2 = contra_loss2.clone().detach()
+        # dist.all_reduce(reduced_con_loss)
+        con_losses_2.update(reduced_con_loss_2.item())
+
         batch_end = time.time()
         batch_times.update(batch_end - batch_start)
 
@@ -659,6 +683,8 @@ def train(
             tb_logger.add_scalar("Sup Loss", sup_losses.avg, i_iter)
             tb_logger.add_scalar("Uns Loss", uns_losses.avg, i_iter)
             tb_logger.add_scalar("Con Loss", con_losses.avg, i_iter)
+            tb_logger.add_scalar("Con Loss1", con_losses_1.avg, i_iter)
+            tb_logger.add_scalar("Con Loss2", con_losses_2.avg, i_iter)
 
         # global recal_iters, store_bank_labeled, store_bank_unlabeled
         if args.inspect:
