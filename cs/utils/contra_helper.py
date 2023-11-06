@@ -439,7 +439,7 @@ class MocoContrastLoss(nn.Module):
 
         neg_logits = torch.exp(logits) * neg_mask
         neg_logits = neg_logits.sum(1, keepdims=True)
-        if self.max_positive:
+        if False:
             logits_calmax = logits.masked_fill(~mask.bool(), -1 * 2 / self.temperature)
             # logits_topn = logits_calmax.max(dim=1).values.unsqueeze(1)
             logits_topn, _ = torch.topk(logits_calmax, k=TopK, dim=1)
@@ -453,12 +453,25 @@ class MocoContrastLoss(nn.Module):
                 outs['mask'] = mask_err
             log_prob = logits_topn - torch.log(torch.exp(logits_topn) + neg_logits)
             loss = - (self.temperature / self.base_temperature) * log_prob
+        elif True:
+            random_mask = torch.randint(0, 2, (logits.shape[0], ), device=device).bool()
+            logits_calmax = logits.masked_fill(~mask.bool(), -1 * 2 / self.temperature)
+            # logits_topn = logits_calmax.max(dim=1).values.unsqueeze(1)
+            logits_topn, _ = torch.topk(logits_calmax, k=TopK, dim=1)
+            log_prob = logits_topn - torch.log(torch.exp(logits_topn) + neg_logits)
+            loss1 = - (self.temperature / self.base_temperature) * log_prob[random_mask]
+            loss1 = loss1[~torch.isnan(loss1)].sum() / (logits.shape[0] * TopK)
+            logits = logits - torch.log(torch.exp(logits) + neg_logits)
+            loss2 = - (self.temperature / self.base_temperature) * (mask * logits).sum(1) / mask.sum(1)
+            loss2 = loss2[~random_mask]
+            loss2 = loss2[~torch.isnan(loss2)].sum() / logits.shape[0]
+            loss = loss1 + loss2
         else:
             logits = logits - torch.log(torch.exp(logits) + neg_logits)
             loss = - (self.temperature / self.base_temperature) * (mask * logits).sum(1) / mask.sum(1)
-        nan_mask = torch.isnan(loss)
-        loss = loss[~nan_mask]
-        loss = loss.mean()
+            nan_mask = torch.isnan(loss)
+            loss = loss[~nan_mask]
+            loss = loss.mean()
         # if anchor_count > 1200:
         #     loss = loss.to(real_device)
         outs['loss'] = loss
@@ -493,9 +506,9 @@ class MocoContrastLoss(nn.Module):
         if self.memory_bank is not None:
             outs = self._contrastive_memory_bank(feats_, feats_t_, labels_, TopK=TopK, unlabeled=unlabeled)
             loss = outs['loss']
-            if unlabeled and gtlabels is not None:
-                mask_err = outs['mask']
-                self.eval_bank_2.add(labels_[mask_err], gtlabels_[mask_err])
+            # if unlabeled and gtlabels is not None:
+            #     mask_err = outs['mask']
+            #     self.eval_bank_2.add(labels_[mask_err], gtlabels_[mask_err])
         else:
             loss = self._contrastive(feats_, labels_)
         with torch.no_grad():
