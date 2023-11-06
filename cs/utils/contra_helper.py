@@ -15,7 +15,7 @@ class MocoContrastLoss(nn.Module):
                  memory_size=2000, small_area=True,
                  feat_dim=256, max_positive=False,
                  device='cpu', ignore_label=255,
-                 eval_feat=True, end_iter=2 ** 19):
+                 eval_feat=True):
         super(MocoContrastLoss, self).__init__()
         self.temperature = temperature
         self.max_positive = max_positive
@@ -25,10 +25,6 @@ class MocoContrastLoss(nn.Module):
         self.max_samples = int(neg_num * nclass)
         self.max_views = [neg_num for _ in range(nclass)]
         self.small_area = small_area
-        self.now_iter = -1
-        self.end_iter = 2 * end_iter
-        self.k_min = 5
-        self.k_max = 50
         if memory_bank:
             self.memory_bank = MoCoMemoryBank(nclass, memory_size, pixel_update_freq, feat_dim, device)
             self.use_sds = False
@@ -454,7 +450,7 @@ class MocoContrastLoss(nn.Module):
             log_prob = logits_topn - torch.log(torch.exp(logits_topn) + neg_logits)
             loss = - (self.temperature / self.base_temperature) * log_prob
         elif True:
-            random_mask = torch.randint(0, 2, (logits.shape[0], ), device=device).bool()
+            random_mask = torch.randint(0, 2, (logits.shape[0],), device=device).bool()
             logits_calmax = logits.masked_fill(~mask.bool(), -1 * 2 / self.temperature)
             # logits_topn = logits_calmax.max(dim=1).values.unsqueeze(1)
             logits_topn, _ = torch.topk(logits_calmax, k=TopK, dim=1)
@@ -466,6 +462,8 @@ class MocoContrastLoss(nn.Module):
             loss2 = loss2[~random_mask]
             loss2 = loss2[~torch.isnan(loss2)].sum() / logits.shape[0]
             loss = loss1 + loss2
+            outs['loss1'] = loss1
+            outs['loss2'] = loss2
         else:
             logits = logits - torch.log(torch.exp(logits) + neg_logits)
             loss = - (self.temperature / self.base_temperature) * (mask * logits).sum(1) / mask.sum(1)
@@ -478,8 +476,6 @@ class MocoContrastLoss(nn.Module):
         return outs
 
     def forward(self, feats, feats_t, labels, predict, unlabeled=True, gtlabels=None):
-        self.now_iter += 1
-        TopK = int(math.ceil((self.now_iter / self.end_iter) * (self.k_max - self.k_min)) + self.k_min)
         batchsize, _, h, w = feats.shape
         labels = labels.unsqueeze(1).float().clone()
         labels = torch.nn.functional.interpolate(labels, (feats.shape[2], feats.shape[3]), mode='nearest')
@@ -495,16 +491,16 @@ class MocoContrastLoss(nn.Module):
         feats_t = feats_t.permute(0, 2, 3, 1)
         # memory_bank_use = self.memory_bank is not None and len(self.memory_bank) > 0
         if unlabeled and gtlabels is not None:
-            feats_, feats_t_, labels_, gtlabels_ = self._area_sampling(feats, feats_t, labels, predict, unlabeled,
-                                                                       gt_y=gtlabels)
+            feats_, feats_t_, labels_, gtlabels_ = self._random_sampling(feats, feats_t, labels, predict, unlabeled,
+                                                                         gt_y=gtlabels)
             self.eval_bank.add(labels_, gtlabels_)
         else:
-            feats_, feats_t_, labels_ = self._area_sampling(feats, feats_t, labels, predict, unlabeled)
+            feats_, feats_t_, labels_ = self._random_sampling(feats, feats_t, labels, predict, unlabeled)
         if feats_.shape[0] == 0:
             loss = 0 * feats.sum()
             return loss
         if self.memory_bank is not None:
-            outs = self._contrastive_memory_bank(feats_, feats_t_, labels_, TopK=TopK, unlabeled=unlabeled)
+            outs = self._contrastive_memory_bank(feats_, feats_t_, labels_, unlabeled=unlabeled)
             loss = outs['loss']
             # if unlabeled and gtlabels is not None:
             #     mask_err = outs['mask']
@@ -513,7 +509,7 @@ class MocoContrastLoss(nn.Module):
             loss = self._contrastive(feats_, labels_)
         with torch.no_grad():
             if self.memory_bank is not None:
-                sperate_ratio, self.use_sds = self.memory_bank.mid_dequeue_enqueue(feats_t, labels, unlabeled)
+                sperate_ratio, self.use_sds = self.memory_bank.random_dequeue_enqueue(feats_t, labels, unlabeled)
                 if self.memory_bank.best_ratio > sperate_ratio:
                     self.memory_bank.best_ratio = sperate_ratio
         return loss
@@ -548,7 +544,7 @@ class MoCoMemoryBank:
             length += tmp_len
         return length
 
-    def random_dequeue_enqueue(self, feats, labels, SMALL_AREA=True):
+    def random_dequeue_enqueue(self, feats, labels, unlabeled=False):
         batch_size, H, W, feat_dim = feats.shape
         memory_size = self.memory_size
         with torch.no_grad():
@@ -560,33 +556,10 @@ class MoCoMemoryBank:
                 this_label_ids = [x for x in this_label_ids if not x == 255]
 
                 for lb in this_label_ids:
-                    if SMALL_AREA:
-                        # 这些步骤先来得出mask的具体位置
-                        idxs = (this_label == lb).nonzero()
-                        mask = torch.zeros_like(this_label).to(self.device)
-                        mask[idxs[:, 0], idxs[:, 1]] = 1
-                        mask_list = small_area(mask, self.pixel_update_freq)
-
                     # 转化为方便处理的tensor
                     this_label_s = this_label.view(-1)
                     idxs = (this_label_s == lb).nonzero()
                     this_feat_s = torch.transpose(this_feat.view(-1, feat_dim), 0, 1)
-
-                    if SMALL_AREA:
-                        # small area enqueue and dequeue
-                        for mask in mask_list:
-                            feat = torch.mean(this_feat_s[:, mask], dim=1).squeeze(1)
-                            ptr = int(self.seg_queue_ptr[lb])
-                            length = self.seg_queue[lb].shape[1]
-                            if length < memory_size:
-                                self.seg_queue[lb] = torch.cat(
-                                    (self.seg_queue[lb], F.normalize(feat, p=2, dim=0).unsqueeze(1)),
-                                    dim=1)
-                            else:
-                                self.seg_queue[lb][:, ptr] = F.normalize(feat, p=2, dim=0)
-                            self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + 1) % memory_size
-                        # to balance local info and context info
-
                     # pixel enqueue and dequeue
                     num_pixel = idxs.shape[0]
                     perm = torch.randperm(num_pixel)
@@ -1007,7 +980,7 @@ class EvalFeat:
         return accuracy
 
 
-def edge_interior(label_mask: torch.Tensor, ignore_mask:torch.Tensor, min_k=3, max_k=5, pow=3, edge=5):
+def edge_interior(label_mask: torch.Tensor, ignore_mask: torch.Tensor, min_k=3, max_k=5, pow=3, edge=5):
     device = label_mask.device
     label_mask = label_mask.cpu().numpy()
     ignore_mask = ignore_mask.cpu().numpy()

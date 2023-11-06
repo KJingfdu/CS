@@ -261,7 +261,7 @@ def get_criterion(cfg):
     return criterion
 
 
-def get_contra_loss(cfg, end_iter=2**19, device='cpu'):
+def get_contra_loss(cfg, device='cpu'):
     cfg_contra = cfg["trainer"]["contrastive"]
     if 'pascal' in cfg['dataset']['type'] or 'VOC' in cfg['dataset']['type']:
         nclass = 21
@@ -279,7 +279,7 @@ def get_contra_loss(cfg, end_iter=2**19, device='cpu'):
     max_positive = cfg_contra['max_positive']
     contra_loss = MocoContrastLoss(nclass, temperature, neg_num,
                                    memory_bank, pixel_update_freq, memory_size,
-                                   small_area, feat_dim, max_positive, device, end_iter=end_iter)
+                                   small_area, feat_dim, max_positive, device)
     return contra_loss
 
 

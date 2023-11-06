@@ -113,7 +113,7 @@ def main():
     times = 10 if "pascal" in cfg["dataset"]["type"] else 1
     total_iters = cfg_trainer["epochs"] * len(train_loader_sup)
     if not cfg["trainer"]["contrastive"].get('method', 'u2pl') == 'u2pl':
-        contra_loss_fn = get_contra_loss(cfg, device='cuda', end_iter=total_iters)
+        contra_loss_fn = get_contra_loss(cfg, device='cuda')
 
     # times = 10
 
@@ -656,9 +656,9 @@ def train(
             )
 
             tb_logger.add_scalar("lr", learning_rates.val, i_iter)
-            tb_logger.add_scalar("Sup Loss", sup_losses.val, i_iter)
-            tb_logger.add_scalar("Uns Loss", uns_losses.val, i_iter)
-            tb_logger.add_scalar("Con Loss", con_losses.val, i_iter)
+            tb_logger.add_scalar("Sup Loss", sup_losses.avg, i_iter)
+            tb_logger.add_scalar("Uns Loss", uns_losses.avg, i_iter)
+            tb_logger.add_scalar("Con Loss", con_losses.avg, i_iter)
 
         # global recal_iters, store_bank_labeled, store_bank_unlabeled
         if args.inspect:
