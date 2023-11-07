@@ -53,7 +53,7 @@ class MocoContrastLoss(nn.Module):
             classes.append(this_classes)
             total_classes += len(this_classes)
         if total_classes == 0:
-            return None, None
+            return None, None, None, None
 
         X_ = torch.empty((0, feat_dim)).cuda()
         X_t_ = torch.empty((0, feat_dim)).cuda()
@@ -492,13 +492,15 @@ class MocoContrastLoss(nn.Module):
         feats_t = feats_t.permute(0, 2, 3, 1)
         # memory_bank_use = self.memory_bank is not None and len(self.memory_bank) > 0
         if unlabeled and gtlabels is not None:
-            feats_, feats_t_, labels_, gtlabels_ = self._random_sampling(feats, feats_t, labels, predict, unlabeled,
-                                                                         gt_y=gtlabels)
+            feats_, feats_t_, labels_, gtlabels_ = self._area_sampling(feats, feats_t, labels, predict, unlabeled,
+                                                                       gt_y=gtlabels)
             self.eval_bank.add(labels_, gtlabels_)
         else:
-            feats_, feats_t_, labels_ = self._random_sampling(feats, feats_t, labels, predict, unlabeled)
+            feats_, feats_t_, labels_ = self._area_sampling(feats, feats_t, labels, predict, unlabeled)
         if feats_.shape[0] == 0:
             outs['loss'] = 0 * feats.sum()
+            outs['loss1'] = 0 * feats.sum()
+            outs['loss2'] = 0 * feats.sum()
             return outs
         if self.memory_bank is not None:
             outs = self._contrastive_memory_bank(feats_, feats_t_, labels_, unlabeled=unlabeled)
@@ -510,9 +512,7 @@ class MocoContrastLoss(nn.Module):
             outs['loss'] = self._contrastive(feats_, labels_)
         with torch.no_grad():
             if self.memory_bank is not None:
-                sperate_ratio, self.use_sds = self.memory_bank.random_dequeue_enqueue(feats_t, labels, unlabeled)
-                if self.memory_bank.best_ratio > sperate_ratio:
-                    self.memory_bank.best_ratio = sperate_ratio
+                self.memory_bank.dequeue_enqueue(feats_t_, labels_, unlabeled)
         return outs
 
 
@@ -595,101 +595,60 @@ class MoCoMemoryBank:
         else:
             return self.best_ratio, False
 
-    def dequeue_enqueue(self, feats, labels, SMALL_AREA=True):
-        memory_queue = [a.clone() for a in self.seg_queue]
-        memory_queue_ptr = self.seg_queue_ptr.clone()
-        batch_size, H, W, feat_dim = feats.shape
+    def dequeue_enqueue(self, feats, labels, unlabeled=False):
         memory_size = self.memory_size
         with torch.no_grad():
-            for bs in range(batch_size):
-                this_feat = feats[bs].contiguous().to(self.device)
-                this_label = labels[bs].contiguous().to(self.device)
-                this_label_ids = torch.unique(this_label)
-                # this_label_ids = [x for x in this_label_ids if x > 0 and not x == 255]
-                this_label_ids = [x for x in this_label_ids if not x == 255]
+            this_label_ids = torch.unique(labels)
+            # this_label_ids = [x for x in this_label_ids if x > 0 and not x == 255]
+            this_label_ids = [x.long() for x in this_label_ids if not x == 255]
+            feats = torch.transpose(feats, 0, 1)
+            for lb in this_label_ids:
+                # 转化为方便处理的tensor
+                idxs = (labels == lb).nonzero()
 
-                for lb in this_label_ids:
-                    if SMALL_AREA:
-                        # 这些步骤先来得出mask的具体位置
-                        idxs = (this_label == lb).nonzero()
-                        mask = torch.zeros_like(this_label).to(self.device)
-                        mask[idxs[:, 0], idxs[:, 1]] = 1
-                        mask_list = small_area(mask, self.pixel_update_freq)
-
-                    # 转化为方便处理的tensor
-                    this_label_s = this_label.view(-1)
-                    idxs = (this_label_s == lb).nonzero()
-                    this_feat_s = torch.transpose(this_feat.view(-1, feat_dim), 0, 1)
-
-                    # total area enqueue and dequeue
-                    feat = torch.mean(this_feat_s[:, idxs], dim=1).squeeze(1)
-                    ptr = int(self.seg_queue_ptr[lb])
-                    length = self.seg_queue[lb].shape[1]
-                    if length < memory_size:
-                        self.seg_queue[lb] = torch.cat((self.seg_queue[lb], F.normalize(feat, p=2, dim=0).unsqueeze(1)),
-                                                       dim=1)
-                    else:
-                        self.seg_queue[lb][:, ptr] = F.normalize(feat, p=2, dim=0)
+                # total area enqueue and dequeue
+                feat = torch.mean(feats[:, idxs].squeeze(2), dim=1)
+                ptr = int(self.seg_queue_ptr[lb])
+                length = self.seg_queue[lb].shape[1]
+                if length < memory_size:
+                    self.seg_queue[lb] = torch.cat((self.seg_queue[lb], F.normalize(feat, p=2, dim=0).unsqueeze(1)),
+                                                   dim=1)
+                else:
+                    self.seg_queue[lb][:, ptr] = F.normalize(feat, p=2, dim=0)
                     self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + 1) % memory_size
 
-                    if SMALL_AREA:
-                        # small area enqueue and dequeue
-                        for mask in mask_list:
-                            feat = torch.mean(this_feat_s[:, mask], dim=1).squeeze(1)
-                            ptr = int(self.seg_queue_ptr[lb])
-                            length = self.seg_queue[lb].shape[1]
-                            if length < memory_size:
-                                self.seg_queue[lb] = torch.cat(
-                                    (self.seg_queue[lb], F.normalize(feat, p=2, dim=0).unsqueeze(1)),
-                                    dim=1)
-                            else:
-                                self.seg_queue[lb][:, ptr] = F.normalize(feat, p=2, dim=0)
-                            self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + 1) % memory_size
-                        # to balance local info and context info
-
-                    # pixel enqueue and dequeue
-                    num_pixel = idxs.shape[0]
-                    perm = torch.randperm(num_pixel)
-                    K = min(num_pixel, self.pixel_update_freq)
-                    # 关键的一步 之前没引用idxs
-                    feat = this_feat_s[:, idxs[perm[:K], 0]]
-                    ptr = int(self.seg_queue_ptr[lb])
-                    length = self.seg_queue[lb].shape[1]
-                    if length < memory_size:
-                        if ptr + K >= memory_size:
-                            self.seg_queue[lb] = torch.cat((self.seg_queue[lb], feat), dim=1)
-                            self.seg_queue[lb] = self.seg_queue[lb][:, -memory_size:]
-                            self.seg_queue_ptr[lb] = 0
-                        else:
-                            self.seg_queue[lb] = torch.cat((self.seg_queue[lb], feat), dim=1)
-                            self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + K) % memory_size
+                # pixel enqueue and dequeue
+                # 关键的一步 之前没引用idxs
+                num_pixel = idxs.shape[0]
+                perm = torch.randperm(num_pixel)
+                K = min(num_pixel, self.pixel_update_freq)
+                # 关键的一步 之前没引用idxs
+                feat = feats[:, idxs[perm[:K], 0]]
+                ptr = int(self.seg_queue_ptr[lb])
+                length = self.seg_queue[lb].shape[1]
+                if length < memory_size:
+                    if ptr + K >= memory_size:
+                        self.seg_queue[lb] = torch.cat((self.seg_queue[lb], feat), dim=1)
+                        self.seg_queue[lb] = self.seg_queue[lb][:, -memory_size:]
+                        self.seg_queue_ptr[lb] = 0
                     else:
-                        if ptr + K >= memory_size:
-                            self.seg_queue[lb][:, -K:] = feat
-                            self.seg_queue_ptr[lb] = 0
-                        else:
-                            self.seg_queue[lb][:, ptr:ptr + K] = feat
-                            self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + K) % memory_size
+                        self.seg_queue[lb] = torch.cat((self.seg_queue[lb], feat), dim=1)
+                        self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + K) % memory_size
+                else:
+                    if ptr + K >= memory_size:
+                        self.seg_queue[lb][:, -K:] = feat
+                        self.seg_queue_ptr[lb] = 0
+                    else:
+                        self.seg_queue[lb][:, ptr:ptr + K] = feat
+                        self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + K) % memory_size
 
         if self.__len__() > 0:
-            separate, ratio, self.mean_feature = separation(self.seg_queue, memory_queue,
-                                                            self.class_num * (self.class_num - 1),
-                                                            self.best_ratio,
-                                                            n=self.class_num * (self.class_num - 1))
-            length_now = 0
-            for i in range(len(self.seg_queue)):
-                length_now += self.seg_queue[i].shape[1]
-            length_old = 0
-            for i in range(len(memory_queue)):
-                length_old += memory_queue[i].shape[1]
-            if separate and length_now >= length_old:
-                is_queue = True
-            else:
-                self.seg_queue = memory_queue
-                self.seg_queue_ptr = memory_queue_ptr.clone()
-                is_queue = False
+            self.mean_feature = torch.cat([torch.mean(f, dim=1, keepdim=True) for f in self.seg_queue], dim=1)
+            ratio = (torch.matmul(torch.transpose(self.mean_feature, 0, 1),
+                                  self.mean_feature)).sum() + self.class_num * (self.class_num - 1)
+            is_queue = True
             with open('3.txt', 'a') as file:
-                file.write('separation {}:{}\n'.format(is_queue, ratio))
+                file.write('separation active {}:{}\n'.format(is_queue, ratio))
             return ratio, True
         else:
             return self.best_ratio, False

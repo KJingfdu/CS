@@ -587,8 +587,8 @@ def train(
                         contra_loss1 = contra_loss_outs['loss1'] * weight
                         contra_loss2 = contra_loss_outs['loss2'] * weight
                     except:
-                        contra_loss1 = 0
-                        contra_loss2 = 0
+                        contra_loss1 = torch.Tensor(0)
+                        contra_loss2 = torch.Tensor(0)
                     label_u_aug[mask_u_aug] = 255
                     contra_loss_outs = contra_loss_fn(torch.nn.functional.normalize(rep_all[num_labeled:], dim=1),
                                                       torch.nn.functional.normalize(rep_all_teacher[num_labeled:], dim=1),
@@ -600,8 +600,8 @@ def train(
                         contra_loss1 += contra_loss_outs['loss1'] * weight
                         contra_loss2 += contra_loss_outs['loss2'] * weight
                     except:
-                        contra_loss1 = 0
-                        contra_loss2 = 0
+                        contra_loss1 = torch.Tensor(0)
+                        contra_loss2 = torch.Tensor(0)
                     contra_loss += contra_loss_outs['loss'] * weight
             else:
                 contra_loss = 0 * rep_all.sum()
