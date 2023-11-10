@@ -41,7 +41,7 @@ from cs.utils.utils import (
 from eval import scale_crop_process
 
 parser = argparse.ArgumentParser(description="Semi-Supervised Semantic Segmentation")
-parser.add_argument("--config", type=str, default="experiments/cityscapes/372/ours/config.yaml")
+parser.add_argument("--config", type=str, default="experiments/pascal/1323/ours/config.yaml")
 parser.add_argument("--local_rank", type=int, default=0)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--port", default=None, type=int)

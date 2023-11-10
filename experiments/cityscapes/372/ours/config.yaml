@@ -59,7 +59,6 @@ trainer: # Required.
     memory_bank: True
     pixel_update_freq: 20
     memory_size: 2000
-    small_area: False
     mode: 'N+A+F'
     strategy: 'boundary-interior'
 
