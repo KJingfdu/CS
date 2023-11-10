@@ -79,7 +79,7 @@ def build_vocloader(split, all_cfg, seed=0):
     cfg.update(cfg.get(split, {}))
 
     workers = cfg.get("workers", 2)
-    batch_size = cfg.get("batch_size", 1)
+    batch_size = 1
     n_sup = cfg.get("n_sup", 10582)
     # build transform
     trs_form = build_transfrom(cfg)

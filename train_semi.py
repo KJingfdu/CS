@@ -26,10 +26,6 @@ from cs.utils.loss_helper import (
     get_criterion,
     get_contra_loss,
 )
-from cs.utils.contra_helper import (
-    UnlabelFilter,
-    EvalModule,
-)
 from cs.utils.lr_helper import get_optimizer, get_scheduler
 from cs.utils.utils import (
     AverageMeter,
@@ -42,6 +38,7 @@ from cs.utils.utils import (
     set_random_seed,
     indicator_cal,
 )
+from eval import scale_crop_process
 
 parser = argparse.ArgumentParser(description="Semi-Supervised Semantic Segmentation")
 parser.add_argument("--config", type=str, default="experiments/cityscapes/372/ours/config.yaml")
@@ -67,8 +64,6 @@ def main():
 
     cfg["exp_path"] = os.path.dirname(args.config)
     cfg["save_path"] = os.path.join(cfg["exp_path"], cfg["saver"]["snapshot_dir"])
-
-    Evalmodule = EvalModule(cfg['net']['num_classes'], cfg['net']['decoder']['kwargs']['inner_planes'], 'cuda')
 
     cudnn.enabled = True
     cudnn.benchmark = True
@@ -197,10 +192,6 @@ def main():
             )
         ).cuda()
 
-
-    global unlabeled_filter
-    unlabeled_filter = UnlabelFilter(total_iters)
-
     # Start to train model
     for epoch in range(last_epoch, cfg_trainer["epochs"]):
         if cfg["trainer"]["contrastive"].get('method', 'u2pl') == 'u2pl':
@@ -252,11 +243,7 @@ def main():
             if epoch < cfg["trainer"].get("sup_only_epoch", 1):
                 prec = validate(model, val_loader, epoch, logger)
             else:
-                if Evalmodule is not None:
-                    prec = validate(model_teacher, val_loader, epoch, logger, Evalmodule)
-                    separate_ratio, var_features, cons = Evalmodule.indicator()
-                else:
-                    prec = validate(model_teacher, val_loader, epoch, logger)
+                prec = validate(model_teacher, val_loader, epoch, logger)
 
             if rank == 0:
                 state = {
@@ -280,10 +267,6 @@ def main():
                     )
                 )
                 tb_logger.add_scalar("mIoU val", prec, epoch)
-                if Evalmodule is not None:
-                    tb_logger.add_scalar('separate_ratio test', separate_ratio, epoch)
-                    tb_logger.add_scalar('var_features_sum test', sum(var_features), epoch)
-                    tb_logger.add_scalar('cons_sum test', sum(cons), epoch)
 
 
 def train(
@@ -299,7 +282,7 @@ def train(
         logger,
         **kwargs
 ):
-    global prototype, cfg, unlabeled_filter
+    global prototype, cfg
     if cfg["trainer"]["contrastive"].get('method', 'u2pl') == 'u2pl':
         memobank = kwargs['memobank']
         queue_ptrlis = kwargs['queue_ptrlis']
@@ -746,21 +729,18 @@ def validate(
         images = images.cuda()
         labels = labels.long().cuda()
 
-        with torch.no_grad():
-            outs = model(images)
-
-        # get the output produced by model_teacher
-        output = outs["pred"]
-        if evalmodule is not None:
-            feats = outs["rep"]
-            labels_feats = F.interpolate(
-                labels.unsqueeze(1).float(), output.shape[2:], mode="nearest"
+        if "pascal" in cfg["dataset"]["type"]:
+            with torch.no_grad():
+                outs = model(images)
+            # get the output produced by model_teacher
+            output = outs["pred"]
+            output = F.interpolate(
+                output, labels.shape[1:], mode="bilinear", align_corners=True
             )
-            evalmodule.add(feats, labels_feats)
-        output = F.interpolate(
-            output, labels.shape[1:], mode="bilinear", align_corners=True
-        )
-        output = output.data.max(1)[1].cpu().numpy()
+            output = output.data.max(1)[1].cpu().numpy()
+        else:
+            output = crop_forward(images, model)
+            output = output.data.max(0)[1].unsqueeze(0).cpu().numpy()
         target_origin = labels.cpu().numpy()
 
         # start to calculate miou
@@ -789,6 +769,26 @@ def validate(
         logger.info(" * epoch {} mIoU {:.2f}".format(epoch, mIoU * 100))
 
     return mIoU
+
+
+def crop_forward(img, model):
+    long_size = 2048
+    classes = 19
+    new_h = long_size
+    new_w = long_size
+    h, w = img.size()[-2:]
+    if h > w:
+        new_w = round(long_size / float(h) * w)
+    else:
+        new_h = round(long_size / float(w) * h)
+    image_scale = F.interpolate(
+        img, size=(new_h, new_w), mode="bilinear", align_corners=True
+    )
+    prediction = torch.zeros((classes, h, w), dtype=torch.float).cuda()
+    prediction += scale_crop_process(
+        model, image_scale, classes, 769, 769, h, w
+    )
+    return prediction
 
 
 if __name__ == "__main__":

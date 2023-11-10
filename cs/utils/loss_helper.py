@@ -274,12 +274,12 @@ def get_contra_loss(cfg, device='cpu'):
     memory_bank = cfg_contra['memory_bank']
     pixel_update_freq = cfg_contra['pixel_update_freq']
     memory_size = cfg_contra['memory_size']
-    small_area = cfg_contra['small_area']
+    mode = cfg_contra['mode']
+    strategy = cfg_contra['strategy']
     feat_dim = cfg['net']['decoder']['kwargs']['inner_planes']
-    max_positive = cfg_contra['max_positive']
-    contra_loss = MocoContrastLoss(nclass, temperature, neg_num,
+    contra_loss = MocoContrastLoss(nclass, neg_num, temperature,
                                    memory_bank, pixel_update_freq, memory_size,
-                                   small_area, feat_dim, max_positive, device)
+                                   feat_dim, mode, strategy, device)
     return contra_loss
 
 

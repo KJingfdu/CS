@@ -10,72 +10,54 @@ from .sep_helper import separation, gradient_descent, separation_func
 
 
 class MocoContrastLoss(nn.Module):
-    def __init__(self, nclass, temperature=0.1,
-                 neg_num=64, memory_bank=True, pixel_update_freq=50,
-                 memory_size=2000, small_area=True,
-                 feat_dim=256, max_positive=False,
-                 device='cpu', ignore_label=255,
-                 eval_feat=True):
+    def __init__(self, nclass, neg_num=64, temperature=0.1,
+                 memory_bank=True, pixel_update_freq=50,
+                 memory_size=2000, feat_dim=256,
+                 mode='N+A+F', strategy='random',
+                 device='cpu', ignore_label=255, eval_feat=True):
         super(MocoContrastLoss, self).__init__()
+        # mode can only be chosed from ['N', 'A', 'N+A', 'N+A+F']
+        self.strategy = strategy if strategy in ['random', 'semi-hard', 'boundary-interior'] else 'boundary-interior'
+        self.mode = mode if mode in ['N', 'A', 'N+A', 'N+A+F'] else 'N+A'
         self.temperature = temperature
-        self.max_positive = max_positive
-        self.base_temperature = temperature
         self.ignore_label = ignore_label
         self.nclass = nclass
-        self.max_samples = int(neg_num * nclass)
+        self.topk = 5
         self.max_views = [neg_num for _ in range(nclass)]
-        self.small_area = small_area
         if memory_bank:
             self.memory_bank = MoCoMemoryBank(nclass, memory_size, pixel_update_freq, feat_dim, device)
-            self.use_sds = False
         else:
             self.memory_bank = None
         if eval_feat:
             self.eval_bank = EvalFeat()
             self.eval_bank_2 = EvalFeat()
 
+    # 这个random采样还是在各个类别上随机选取点采样的,还不是最普通的random
     def _random_sampling(self, X, X_t, y_hat, y, unlabeled=True, gt_y=None):
         batch_size = X.shape[0]
         y_hat = y_hat.contiguous().view(batch_size, -1)
-        # y = y.contiguous().view(batch_size, -1)
+        sampling_num = 1200
         if gt_y is not None:
             gt_y = gt_y.contiguous().view(batch_size, -1)
         X = X.contiguous().view(X.shape[0], -1, X.shape[-1])
         X_t = X_t.contiguous().view(X_t.shape[0], -1, X_t.shape[-1])
         feat_dim = X.shape[-1]
-        classes = []
-        total_classes = 0
-        for ii in range(batch_size):
-            this_y = y_hat[ii]
-            this_classes = torch.unique(this_y)
-            this_classes = [x for x in this_classes if x >= 0 and x != self.ignore_label]
-            this_classes = [x for x in this_classes if (this_y == x).nonzero().shape[0] > self.max_views[x]]
-            classes.append(this_classes)
-            total_classes += len(this_classes)
-        if total_classes == 0:
-            return None, None, None, None
-
         X_ = torch.empty((0, feat_dim)).cuda()
         X_t_ = torch.empty((0, feat_dim)).cuda()
-        y_ = torch.empty(0).cuda()
+        y_ = torch.empty(0).long().cuda()
         Y_ = torch.empty(0).cuda()
         for ii in range(batch_size):
             this_y_hat = y_hat[ii]
-            # this_y = y[ii]
-            this_classes = classes[ii]
-            for cls_id in this_classes:
-                n_view = self.max_views[cls_id]
-                indices = (this_y_hat == cls_id).nonzero()
-                num_all = indices.shape[0]
-                perm = torch.randperm(num_all)
-                indices = indices[perm[:n_view]]
-
-                X_ = torch.cat((X_, X[ii, indices, :].squeeze(1)), dim=0)
-                X_t_ = torch.cat((X_t_, X_t[ii, indices, :].squeeze(1)), dim=0)
-                if gt_y is not None:
-                    Y_ = torch.cat((Y_, gt_y[ii, indices].squeeze(1)))
-                Y = torch.ones(n_view).cuda() * cls_id
-                y_ = torch.cat((y_, Y))
+            ignored_y_hat = (this_y_hat != 255).nonzero().squeeze()
+            num_pixels = ignored_y_hat.shape[0]
+            perm = torch.randperm(num_pixels)
+            K = min(sampling_num, num_pixels)
+            indices = ignored_y_hat[perm[:K]]
+            X_ = torch.cat((X_, X[ii, indices, :]), dim=0)
+            X_t_ = torch.cat((X_t_, X_t[ii, indices, :]), dim=0)
+            if gt_y is not None:
+                Y_ = torch.cat((Y_, gt_y[ii, indices]))
+            y_ = torch.cat((y_, this_y_hat[indices]))
         if gt_y is not None and unlabeled:
             return X_, X_t_, y_, Y_
         return X_, X_t_, y_
@@ -144,118 +126,6 @@ class MocoContrastLoss(nn.Module):
             return X_, X_t_, y_, Y_
         return X_, X_t_, y_
 
-    def _mid_sampling(self, X, X_t, y_hat, y, unlabeled=True, gt_y=None, decay=0.5):
-        batch_size = X.shape[0]
-        y_hat = y_hat.contiguous().view(batch_size, -1)
-        y = y.contiguous().view(batch_size, -1)
-        if gt_y is not None:
-            gt_y = gt_y.contiguous().view(batch_size, -1)
-        X = X.contiguous().view(X.shape[0], -1, X.shape[-1])
-        X_t = X_t.contiguous().view(X_t.shape[0], -1, X_t.shape[-1])
-        # y_hat为真实标签 y为预测标签
-        feat_dim = X.shape[-1]
-        classes = []
-        total_classes = 0
-        if self.use_sds and unlabeled:
-            mean_features = self.memory_bank.mean_feature
-        # filter each image, to find what class they have num > self.max_view pixel
-        for ii in range(batch_size):
-            this_y = y_hat[ii]
-            this_classes = torch.unique(this_y)
-            # this_classes = [x for x in this_classes if x > 0 and x != self.ignore_label]
-            this_classes = [x for x in this_classes if x >= 0 and x != self.ignore_label]
-            this_classes = [x for x in this_classes if (this_y == x).nonzero().shape[0] > self.max_views[x]]
-            classes.append(this_classes)
-            total_classes += len(this_classes)
-
-        if total_classes == 0:
-            return None, None
-
-        # n_view = self.max_samples // total_classes
-        # n_view = min(n_view, self.max_views)
-        # X_ = torch.zeros((total_classes, n_view, feat_dim), dtype=torch.float).cuda()
-        X_ = torch.empty((0, feat_dim)).cuda()
-        X_t_ = torch.empty((0, feat_dim)).cuda()
-        y_ = torch.empty(0).cuda()
-        if gt_y is not None:
-            Y_ = torch.empty(0).cuda()
-        for ii in range(batch_size):
-            this_y_hat = y_hat[ii]
-            this_y = y[ii]
-            this_classes = classes[ii]
-            for cls_id in this_classes:
-                n_view = self.max_views[cls_id]
-                indices = None
-                hard_indices = ((this_y_hat == cls_id) & (this_y != cls_id)).nonzero()
-                easy_indices = ((this_y_hat == cls_id) & (this_y == cls_id)).nonzero()
-                if self.use_sds and unlabeled:
-                    mean_feature_i = mean_features[:, cls_id]  # (feat_dim,)
-                    hard_features = X_t[ii, hard_indices, :].squeeze(1)
-                    easy_features = X_t[ii, easy_indices, :].squeeze(1)
-                    # feature_cos_seg = torch.mm(self.memory_bank.seg_queue[cls_id].transpose(1, 0),
-                    #                            mean_feature_i.unsqueeze(1)).squeeze()
-                    feature_cos_hard = torch.mm(hard_features, mean_feature_i.unsqueeze(1)).squeeze()
-                    feature_cos_easy = torch.mm(easy_features, mean_feature_i.unsqueeze(1)).squeeze()
-                    # mean_seg = feature_cos_seg.mean()
-                    mean_hard = feature_cos_hard.mean()
-                    # mean_easy = feature_cos_easy.mean()
-                    if not torch.isnan(mean_hard):
-                        self.memory_bank.query_hard_cos_mean[cls_id] = decay * self.memory_bank.query_hard_cos_mean[
-                            cls_id] + (1 - decay) * mean_hard
-                    # if not torch.isnan(mean_easy):
-                    #     self.memory_bank.query_easy_cos_mean[cls_id] = decay * self.memory_bank.query_easy_cos_mean[
-                    #         cls_id] + (1 - decay) * mean_easy
-                    separ_hard_indices = feature_cos_hard >= self.memory_bank.query_hard_cos_mean[cls_id]
-                    separ_easy_indices = feature_cos_easy >= self.memory_bank.query_hard_cos_mean[cls_id]
-                    if not len(separ_hard_indices.shape):
-                        separ_hard_indices = separ_hard_indices.unsqueeze(0)
-                    if not len(separ_easy_indices.shape):
-                        separ_easy_indices = separ_easy_indices.unsqueeze(0)
-                    hard_indices = hard_indices[separ_hard_indices]
-                    easy_indices = easy_indices[separ_easy_indices]
-                num_hard = hard_indices.shape[0]
-                num_easy = easy_indices.shape[0]
-                if num_hard >= n_view / 2 and num_easy >= n_view / 2:
-                    num_hard_keep = n_view // 2
-                    num_easy_keep = n_view - num_hard_keep
-                elif num_hard + num_easy >= n_view and num_easy < n_view / 2:
-                    num_easy_keep = num_easy
-                    num_hard_keep = n_view - num_easy_keep
-                elif num_hard + num_easy >= n_view and num_hard < n_view / 2:
-                    num_hard_keep = num_hard
-                    num_easy_keep = n_view - num_hard_keep
-                else:
-                    all_indices = torch.cat([easy_indices, hard_indices])
-                    num_all = num_hard + num_easy
-                    perm = torch.randperm(num_all)
-                    all_indices = all_indices[perm]
-                    if num_all < n_view and num_all > 0:
-                        coffient = math.ceil(n_view / num_all)
-                        padding_size = n_view - coffient * num_all
-                        indices = all_indices.repeat(coffient, 1)
-                        if not padding_size == 0:
-                            indices = indices[:padding_size]
-                    else:
-                        continue
-                    # Log.info('this shoud be never touched! {} {} {}'.format(num_hard, num_easy, n_view))
-                    # raise Exception
-                if indices is None:
-                    perm = torch.randperm(num_hard)
-                    hard_indices = hard_indices[perm[:num_hard_keep]]
-                    perm = torch.randperm(num_easy)
-                    easy_indices = easy_indices[perm[:num_easy_keep]]
-                    indices = torch.cat((hard_indices, easy_indices), dim=0)
-
-                X_ = torch.cat((X_, X[ii, indices, :].squeeze(1)), dim=0)
-                X_t_ = torch.cat((X_t_, X_t[ii, indices, :].squeeze(1)), dim=0)
-                if gt_y is not None:
-                    Y_ = torch.cat((Y_, gt_y[ii, indices].squeeze(1)))
-                Y = torch.ones(n_view).cuda() * cls_id
-                y_ = torch.cat((y_, Y))
-        if gt_y is not None and unlabeled:
-            return X_, X_t_, y_, Y_
-        return X_, X_t_, y_
-
     def _semi_sampling(self, X, X_t, y_hat, y, unlabeled=True, gt_y=None):
         batch_size = X.shape[0]
         y_hat = y_hat.contiguous().view(batch_size, -1)
@@ -264,15 +134,12 @@ class MocoContrastLoss(nn.Module):
             gt_y = gt_y.contiguous().view(batch_size, -1)
         X = X.contiguous().view(X.shape[0], -1, X.shape[-1])
         X_t = X_t.contiguous().view(X_t.shape[0], -1, X_t.shape[-1])
-        # y_hat为真实标签 y为预测标签
         feat_dim = X.shape[-1]
         classes = []
         total_classes = 0
-        # filter each image, to find what class they have num > self.max_view pixel
         for ii in range(batch_size):
             this_y = y_hat[ii]
             this_classes = torch.unique(this_y)
-            # this_classes = [x for x in this_classes if x > 0 and x != self.ignore_label]
             this_classes = [x for x in this_classes if x >= 0 and x != self.ignore_label]
             this_classes = [x for x in this_classes if (this_y == x).nonzero().shape[0] > self.max_views[x]]
 
@@ -280,12 +147,10 @@ class MocoContrastLoss(nn.Module):
             total_classes += len(this_classes)
 
         if total_classes == 0:
-            return None, None
+            if gt_y is not None and unlabeled:
+                return None, None, None, None
+            return None, None, None
 
-        # n_view = self.max_samples // total_classes
-        # n_view = min(n_view, self.max_views)
-
-        # X_ = torch.zeros((total_classes, n_view, feat_dim), dtype=torch.float).cuda()
         X_ = torch.empty((0, feat_dim)).cuda()
         X_t_ = torch.empty((0, feat_dim)).cuda()
         y_ = torch.empty(0).cuda()
@@ -321,15 +186,12 @@ class MocoContrastLoss(nn.Module):
                         indices = all_indices.repeat(coffient, 1)
                         if not padding_size == 0:
                             indices = indices[:padding_size]
-                    # Log.info('this shoud be never touched! {} {} {}'.format(num_hard, num_easy, n_view))
-                    # raise Exception
                 if indices is None:
                     perm = torch.randperm(num_hard)
                     hard_indices = hard_indices[perm[:num_hard_keep]]
                     perm = torch.randperm(num_easy)
                     easy_indices = easy_indices[perm[:num_easy_keep]]
                     indices = torch.cat((hard_indices, easy_indices), dim=0)
-
                 X_ = torch.cat((X_, X[ii, indices, :].squeeze(1)), dim=0)
                 X_t_ = torch.cat((X_t_, X_t[ii, indices, :].squeeze(1)), dim=0)
                 if gt_y is not None:
@@ -340,7 +202,81 @@ class MocoContrastLoss(nn.Module):
             return X_, X_t_, y_, Y_
         return X_, X_t_, y_
 
-    def _contrastive(self, feats, labels):
+    def _cal_loss(self, logits, neg_logits, mask, unlabeled):
+        outs = {}
+        device = logits.device
+        if self.mode == 'N':
+            logits_calmax = logits.masked_fill(~mask.bool(), -1 * 2 / self.temperature)
+            logits_topn, _ = torch.topk(logits_calmax, k=self.topk, dim=1)
+            if unlabeled:
+                topn_sum = logits_topn.sum(dim=1)
+                sum_mean = topn_sum.mean()
+                sum_std = torch.std(topn_sum, unbiased=False)
+                mask_err = topn_sum < sum_mean - 3 * sum_std
+                logits_topn = logits_topn[~mask_err]
+                neg_logits = neg_logits[~mask_err]
+                outs['mask'] = mask_err
+            log_prob = logits_topn - torch.log(torch.exp(logits_topn) + neg_logits)
+            loss = - log_prob
+            outs['loss1'] = 0 * loss
+            outs['loss2'] = 0 * loss
+        elif self.mode == 'N+A':
+            random_mask = torch.randint(0, 2, (logits.shape[0],), device=device).bool()
+            logits_calmax = logits.masked_fill(~mask.bool(), -1 * 2 / self.temperature)
+            # logits_topn = logits_calmax.max(dim=1).values.unsqueeze(1)
+            logits_topn, _ = torch.topk(logits_calmax, k=self.topk, dim=1)
+            log_prob = logits_topn - torch.log(torch.exp(logits_topn) + neg_logits)
+            loss1 = - log_prob[random_mask]
+            loss1 = loss1[~torch.isnan(loss1)].sum() / (logits.shape[0] * self.topk)
+            logits = logits - torch.log(torch.exp(logits) + neg_logits)
+            loss2 = - (mask * logits).sum(1) / mask.sum(1)
+            loss2 = loss2[~random_mask]
+            loss2 = loss2[~torch.isnan(loss2)].sum() / logits.shape[0]
+            loss = loss1 + loss2
+            if unlabeled:
+                outs['mask'] = None
+            outs['loss1'] = loss1
+            outs['loss2'] = loss2
+        elif self.mode == 'N+A+F':
+            random_mask = torch.randint(0, 2, (logits.shape[0],), device=device)
+            logits_calmax = logits.masked_fill(~mask.bool(), -1 * 2 / self.temperature)
+            # logits_topn = logits_calmax.max(dim=1).values.unsqueeze(1)
+            logits_topn, _ = torch.topk(logits_calmax, k=self.topk, dim=1)
+            if unlabeled:
+                err1 = error_mask(logits_topn).int()
+                err2 = error_mask(logits).int()
+                mask_err1 = (err1 * random_mask)
+                mask_err2 = (err2 * (1 - random_mask))
+                outs['mask'] = (mask_err1 + mask_err2).bool()
+                mask_err1 = ((1 - err1) * random_mask).bool()
+                mask_err2 = ((1 - err2) * (1 - random_mask)).bool()
+            else:
+                mask_err1 = random_mask.bool()
+                mask_err2 = ~(random_mask.bool())
+            log_prob = logits_topn - torch.log(torch.exp(logits_topn) + neg_logits)
+            loss1 = - log_prob[~mask_err1]
+            loss1 = loss1[~torch.isnan(loss1)].sum() / (logits.shape[0] * self.topk)
+            logits = logits - torch.log(torch.exp(logits) + neg_logits)
+            loss2 = - (mask * logits).sum(1) / mask.sum(1)
+            loss2 = loss2[~mask_err2]
+            loss2 = loss2[~torch.isnan(loss2)].sum() / logits.shape[0]
+            loss = loss1 + loss2
+            outs['loss1'] = loss1
+            outs['loss2'] = loss2
+        elif self.mode == 'A':
+            logits = logits - torch.log(torch.exp(logits) + neg_logits)
+            loss = - (mask * logits).sum(1) / mask.sum(1)
+            nan_mask = torch.isnan(loss)
+            loss = loss[~nan_mask]
+            loss = loss.mean()
+            if unlabeled:
+                outs['mask'] = None
+            outs['loss1'] = 0 * loss
+            outs['loss2'] = 0 * loss
+        outs['loss'] = loss
+        return outs
+
+    def _contrastive(self, feats, feats_t, labels, unlabeled=False):
         if feats is None:
             return None
         anchor_count = feats.shape[0]
@@ -348,7 +284,7 @@ class MocoContrastLoss(nn.Module):
 
         anchor_feature = feats
         contrast_labels = labels
-        contrast_feature = anchor_feature
+        contrast_feature = feats_t
 
         mask = torch.eq(labels, torch.transpose(contrast_labels, 0, 1)).float().cuda()
 
@@ -364,30 +300,10 @@ class MocoContrastLoss(nn.Module):
 
         neg_logits = torch.exp(logits) * neg_mask
         neg_logits = neg_logits.sum(1, keepdims=True)
-        if self.max_positive:
-            logits = logits.masked_fill(~mask.bool(), -1 * 2 / self.temperature)
-            logits = logits.max(dim=1).values.unsqueeze(1)
-            exp_logits = torch.exp(logits)
-            log_prob = logits - torch.log(exp_logits + neg_logits)
-            loss = - (self.temperature / self.base_temperature) * log_prob
-        else:
-            exp_logits = torch.exp(logits)
-            log_prob = logits - torch.log(exp_logits + neg_logits)
-            # sum(1)是为了按照query的i来进行计算损失 现在计算出来的一列向量，每一列都是一个query的对比损失 最后计算平均得出损失函数
-            mean_log_prob_pos = (mask * log_prob).sum(1) / mask.sum(1)
-            loss = - (self.temperature / self.base_temperature) * mean_log_prob_pos
-        nan_mask = torch.isnan(loss)
-        loss = loss[~nan_mask]
-        loss = loss.mean()
+        outs = self._cal_loss(logits, neg_logits, mask, unlabeled)
+        return outs
 
-        return loss
-
-    def _contrastive_memory_bank(self, feats, feats_t, labels, TopK=5, unlabeled=False):
-        # 解释代码中的anchor_count和contrast_count
-        # 原始代码来自于ContrastiveSeg库。 2021ICCV
-        # 由于源代码在选取hard特征时，是选取了每个类别固定长度n_view个点的特征，其标签都被定义为一个数值。所以后续需要repeat。
-        # 然而在保存各个类别的特征及其sampling时，得出的特征和类别信息一一对应，不需要repeat，所以count为1
-        outs = {}
+    def _contrastive_memory_bank(self, feats, feats_t, labels, unlabeled=False):
         if feats is None:
             return None
         anchor_count = feats.shape[0]
@@ -435,44 +351,7 @@ class MocoContrastLoss(nn.Module):
 
         neg_logits = torch.exp(logits) * neg_mask
         neg_logits = neg_logits.sum(1, keepdims=True)
-        if False:
-            logits_calmax = logits.masked_fill(~mask.bool(), -1 * 2 / self.temperature)
-            # logits_topn = logits_calmax.max(dim=1).values.unsqueeze(1)
-            logits_topn, _ = torch.topk(logits_calmax, k=TopK, dim=1)
-            if unlabeled:
-                topn_sum = logits_topn.sum(dim=1)
-                sum_mean = topn_sum.mean()
-                sum_std = torch.std(topn_sum, unbiased=False)
-                mask_err = topn_sum < sum_mean - 3 * sum_std
-                logits_topn = logits_topn[~mask_err]
-                neg_logits = neg_logits[~mask_err]
-                outs['mask'] = mask_err
-            log_prob = logits_topn - torch.log(torch.exp(logits_topn) + neg_logits)
-            loss = - (self.temperature / self.base_temperature) * log_prob
-        elif True:
-            random_mask = torch.randint(0, 2, (logits.shape[0],), device=device).bool()
-            logits_calmax = logits.masked_fill(~mask.bool(), -1 * 2 / self.temperature)
-            # logits_topn = logits_calmax.max(dim=1).values.unsqueeze(1)
-            logits_topn, _ = torch.topk(logits_calmax, k=TopK, dim=1)
-            log_prob = logits_topn - torch.log(torch.exp(logits_topn) + neg_logits)
-            loss1 = - (self.temperature / self.base_temperature) * log_prob[random_mask]
-            loss1 = loss1[~torch.isnan(loss1)].sum() / (logits.shape[0] * TopK)
-            logits = logits - torch.log(torch.exp(logits) + neg_logits)
-            loss2 = - (self.temperature / self.base_temperature) * (mask * logits).sum(1) / mask.sum(1)
-            loss2 = loss2[~random_mask]
-            loss2 = loss2[~torch.isnan(loss2)].sum() / logits.shape[0]
-            loss = loss1 + loss2
-            outs['loss1'] = loss1
-            outs['loss2'] = loss2
-        else:
-            logits = logits - torch.log(torch.exp(logits) + neg_logits)
-            loss = - (self.temperature / self.base_temperature) * (mask * logits).sum(1) / mask.sum(1)
-            nan_mask = torch.isnan(loss)
-            loss = loss[~nan_mask]
-            loss = loss.mean()
-        # if anchor_count > 1200:
-        #     loss = loss.to(real_device)
-        outs['loss'] = loss
+        outs = self._cal_loss(logits, neg_logits, mask, unlabeled)
         return outs
 
     def forward(self, feats, feats_t, labels, predict, unlabeled=True, gtlabels=None):
@@ -490,26 +369,33 @@ class MocoContrastLoss(nn.Module):
         predict = predict.squeeze(1).long()
         feats = feats.permute(0, 2, 3, 1)
         feats_t = feats_t.permute(0, 2, 3, 1)
+        if self.strategy == 'random':
+            sampling_strategy = self._random_sampling
+        elif self.strategy == 'semi-hard':
+            sampling_strategy = self._semi_sampling
+        else:
+            sampling_strategy = self._area_sampling
         # memory_bank_use = self.memory_bank is not None and len(self.memory_bank) > 0
         if unlabeled and gtlabels is not None:
-            feats_, feats_t_, labels_, gtlabels_ = self._area_sampling(feats, feats_t, labels, predict, unlabeled,
-                                                                       gt_y=gtlabels)
-            self.eval_bank.add(labels_, gtlabels_)
+            feats_, feats_t_, labels_, gtlabels_ = sampling_strategy(feats, feats_t, labels, predict, unlabeled,
+                                                                     gt_y=gtlabels)
+            if labels_ is not None:
+                self.eval_bank.add(labels_, gtlabels_)
         else:
-            feats_, feats_t_, labels_ = self._area_sampling(feats, feats_t, labels, predict, unlabeled)
-        if feats_.shape[0] == 0:
+            feats_, feats_t_, labels_ = sampling_strategy(feats, feats_t, labels, predict, unlabeled)
+        if feats_ is not None and feats_.shape[0] == 0:
             outs['loss'] = 0 * feats.sum()
             outs['loss1'] = 0 * feats.sum()
             outs['loss2'] = 0 * feats.sum()
             return outs
         if self.memory_bank is not None:
-            outs = self._contrastive_memory_bank(feats_, feats_t_, labels_, unlabeled=unlabeled)
-            # loss = outs['loss']
-            # if unlabeled and gtlabels is not None:
-            #     mask_err = outs['mask']
-            #     self.eval_bank_2.add(labels_[mask_err], gtlabels_[mask_err])
+            outs = self._contrastive_memory_bank(feats_, feats_t_, labels_, unlabeled)
+            if unlabeled and gtlabels is not None:
+                mask_err = outs['mask']
+                if mask_err is not None:
+                    self.eval_bank_2.add(labels_[mask_err], gtlabels_[mask_err])
         else:
-            outs['loss'] = self._contrastive(feats_, labels_)
+            outs = self._contrastive(feats_, feats_t_, labels_, unlabeled)
         with torch.no_grad():
             if self.memory_bank is not None:
                 self.memory_bank.dequeue_enqueue(feats_t_, labels_, unlabeled)
@@ -518,7 +404,7 @@ class MocoContrastLoss(nn.Module):
 
 class MoCoMemoryBank:
     def __init__(self, class_num=19, memory_size=2000, pixel_update_freq=50,
-                 feat_dim=128, device='cpu', split=1 / 2):
+                 feat_dim=128, device='cpu'):
         super(MoCoMemoryBank, self).__init__()
         self.feat_dim = feat_dim
         self.device = device
@@ -528,7 +414,6 @@ class MoCoMemoryBank:
         self.memory_size = memory_size
         self.pixel_update_freq = pixel_update_freq
         self.best_ratio = 2 * self.class_num * self.class_num
-        self.split = split
         self.mean_feature = [torch.zeros((feat_dim, self.class_num)).to(self.device) for _ in range(class_num)]
         self.queue_cos_mean = -torch.ones((self.class_num,)).to(self.device)
         self.query_hard_cos_mean = -torch.ones((self.class_num,)).to(self.device)
@@ -544,56 +429,6 @@ class MoCoMemoryBank:
                 return 0
             length += tmp_len
         return length
-
-    def random_dequeue_enqueue(self, feats, labels, unlabeled=False):
-        batch_size, H, W, feat_dim = feats.shape
-        memory_size = self.memory_size
-        with torch.no_grad():
-            for bs in range(batch_size):
-                this_feat = feats[bs].contiguous().to(self.device)
-                this_label = labels[bs].contiguous().to(self.device)
-                this_label_ids = torch.unique(this_label)
-                # this_label_ids = [x for x in this_label_ids if x > 0 and not x == 255]
-                this_label_ids = [x for x in this_label_ids if not x == 255]
-
-                for lb in this_label_ids:
-                    # 转化为方便处理的tensor
-                    this_label_s = this_label.view(-1)
-                    idxs = (this_label_s == lb).nonzero()
-                    this_feat_s = torch.transpose(this_feat.view(-1, feat_dim), 0, 1)
-                    # pixel enqueue and dequeue
-                    num_pixel = idxs.shape[0]
-                    perm = torch.randperm(num_pixel)
-                    K = min(num_pixel, self.pixel_update_freq)
-                    # 关键的一步 之前没引用idxs
-                    feat = this_feat_s[:, idxs[perm[:K], 0]]
-                    ptr = int(self.seg_queue_ptr[lb])
-                    length = self.seg_queue[lb].shape[1]
-                    if length < memory_size:
-                        if ptr + K >= memory_size:
-                            self.seg_queue[lb] = torch.cat((self.seg_queue[lb], feat), dim=1)
-                            self.seg_queue[lb] = self.seg_queue[lb][:, -memory_size:]
-                            self.seg_queue_ptr[lb] = 0
-                        else:
-                            self.seg_queue[lb] = torch.cat((self.seg_queue[lb], feat), dim=1)
-                            self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + K) % memory_size
-                    else:
-                        if ptr + K >= memory_size:
-                            self.seg_queue[lb][:, -K:] = feat
-                            self.seg_queue_ptr[lb] = 0
-                        else:
-                            self.seg_queue[lb][:, ptr:ptr + K] = feat
-                            self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + K) % memory_size
-        if self.__len__() > 0:
-            self.mean_feature = torch.cat([torch.mean(f, dim=1, keepdim=True) for f in self.seg_queue], dim=1)
-            ratio = (torch.matmul(torch.transpose(self.mean_feature, 0, 1),
-                                  self.mean_feature)).sum() + self.class_num * (self.class_num - 1)
-            is_queue = True
-            with open('3.txt', 'a') as file:
-                file.write('separation random {}:{}\n'.format(is_queue, ratio))
-            return ratio, True
-        else:
-            return self.best_ratio, False
 
     def dequeue_enqueue(self, feats, labels, unlabeled=False):
         memory_size = self.memory_size
@@ -653,230 +488,12 @@ class MoCoMemoryBank:
         else:
             return self.best_ratio, False
 
-    def active_dequeue_enqueue(self, feats, labels, SMALL_AREA=True, lr=5e-2, iters=1):
-        batch_size, H, W, feat_dim = feats.shape
-        memory_size = self.memory_size
-        is_active = False
-        if self.__len__() > 0:
-            label_ = torch.unique(labels).tolist()
-            feats_mean = torch.cat([torch.mean(f, dim=1, keepdim=True) for f in self.seg_queue], dim=1)
-            feats_mean = F.normalize(feats_mean, dim=0)
-            optimized_feats = gradient_descent(feats_mean, label_, lr, iters)
-            is_active = True
-        with torch.no_grad():
-            for bs in range(batch_size):
-                this_feat = feats[bs].contiguous().to(self.device)
-                this_label = labels[bs].contiguous().to(self.device)
-                this_label_ids = torch.unique(this_label)
-                # this_label_ids = [x for x in this_label_ids if x > 0 and not x == 255]
-                this_label_ids = [x for x in this_label_ids if not x == 255]
-
-                for lb in this_label_ids:
-                    if SMALL_AREA:
-                        # 这些步骤先来得出mask的具体位置
-                        idxs = (this_label == lb).nonzero()
-                        mask = torch.zeros_like(this_label).to(self.device)
-                        mask[idxs[:, 0], idxs[:, 1]] = 1
-                        mask_list = small_area(mask, self.pixel_update_freq)
-
-                    # 转化为方便处理的tensor
-                    this_label_s = this_label.view(-1)
-                    idxs = (this_label_s == lb).nonzero()
-                    this_feat_s = torch.transpose(this_feat.view(-1, feat_dim), 0, 1)
-
-                    # total area enqueue and dequeue
-                    feat_total = torch.mean(this_feat_s[:, idxs], dim=1)
-
-                    if SMALL_AREA:
-                        # small area enqueue and dequeue
-                        for mask in mask_list:
-                            feat = torch.mean(this_feat_s[:, mask], dim=1)
-                            feat_total = torch.cat([feat_total, feat], dim=1)
-
-                        # to balance local info and context info
-
-                    # 关键的一步 之前没引用idxs
-                    feat_total = torch.cat([feat_total, this_feat_s[:, idxs[:, 0]]], dim=1)
-                    ptr = int(self.seg_queue_ptr[lb])
-                    length = self.seg_queue[lb].shape[1]
-
-                    num_pixel = feat_total.shape[1]
-                    device = feat_total.device
-                    K = min(num_pixel, self.pixel_update_freq)
-                    # 在这里计算与最理想的分离方向最相近的向量
-                    if is_active:
-                        feat_cos = torch.mm(optimized_feats[:, lb].unsqueeze(0), feat_total).squeeze()
-                        # feat_total = feat_total[:, feat_cos >= feat_cos.mean()]
-                        # num_cos = feat_total.shape[1]
-                        # K = min(K, num_cos)
-                        # perm = torch.randperm(num_cos)
-                        # feat = feat_total[:, perm[:K]]
-                        _, index = torch.topk(feat_cos, k=K, dim=0)
-                        feat = feat_total[:, index]
-                    else:
-                        perm = torch.randperm(num_pixel)
-                        # 关键的一步 之前没引用idxs
-                        feat = feat_total[:, perm[:K]]
-                    if length < memory_size:
-                        if ptr + K >= memory_size:
-                            self.seg_queue[lb] = torch.cat((self.seg_queue[lb], feat), dim=1)
-                            self.seg_queue[lb] = self.seg_queue[lb][:, -memory_size:]
-                            self.seg_queue_ptr[lb] = 0
-                        else:
-                            self.seg_queue[lb] = torch.cat((self.seg_queue[lb], feat), dim=1)
-                            self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + K) % memory_size
-                    else:
-                        if ptr + K >= memory_size:
-                            self.seg_queue[lb][:, -K:] = feat
-                            self.seg_queue_ptr[lb] = 0
-                        else:
-                            self.seg_queue[lb][:, ptr:ptr + K] = feat
-                            self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + K) % memory_size
-
-        if self.__len__() > 0:
-            self.mean_feature = torch.cat([torch.mean(f, dim=1, keepdim=True) for f in self.seg_queue], dim=1)
-            ratio = (torch.matmul(torch.transpose(self.mean_feature, 0, 1),
-                                  self.mean_feature)).sum() + self.class_num * (self.class_num - 1)
-            is_queue = True
-            with open('3.txt', 'a') as file:
-                file.write('separation active {}:{}\n'.format(is_queue, ratio))
-            return ratio, True
-        else:
-            return self.best_ratio, False
-
-    def mid_dequeue_enqueue(self, feats, labels, unlabeled=True, decay=0.5):
-        batch_size, H, W, feat_dim = feats.shape
-        memory_size = self.memory_size
-        is_active = False
-        if self.__len__() > 0 and unlabeled:
-            feats_mean = torch.cat([torch.mean(f, dim=1, keepdim=True) for f in self.seg_queue], dim=1)
-            feats_mean = F.normalize(feats_mean, dim=0)
-            is_active = True
-        with torch.no_grad():
-            for bs in range(batch_size):
-                this_feat = feats[bs].contiguous().to(self.device)
-                this_label = labels[bs].contiguous().to(self.device)
-                this_label_ids = torch.unique(this_label)
-                # this_label_ids = [x for x in this_label_ids if x > 0 and not x == 255]
-                this_label_ids = [x for x in this_label_ids if not x == 255]
-
-                for lb in this_label_ids:
-                    # 转化为方便处理的tensor
-                    this_label_s = this_label.view(-1)
-                    idxs = (this_label_s == lb).nonzero()
-                    this_feat_s = torch.transpose(this_feat.view(-1, feat_dim), 0, 1)
-
-                    # total area enqueue and dequeue
-                    feat_total = torch.mean(this_feat_s[:, idxs], dim=1)
-
-                    # 关键的一步 之前没引用idxs
-                    feat_total = torch.cat([feat_total, this_feat_s[:, idxs[:, 0]]], dim=1)
-                    ptr = int(self.seg_queue_ptr[lb])
-                    length = self.seg_queue[lb].shape[1]
-
-                    num_pixel = feat_total.shape[1]
-                    K = min(num_pixel, self.pixel_update_freq)
-                    # 在这里计算与最理想的分离方向最相近的向量
-                    if is_active and unlabeled:
-                        # feat_cos_lb = torch.mm(feats_mean[:, lb].unsqueeze(0), self.seg_queue[lb]).squeeze()
-                        feat_cos = torch.mm(feats_mean[:, lb].unsqueeze(0), feat_total).squeeze()
-                        self.queue_cos_mean[lb] = decay * self.queue_cos_mean[lb] + (1 - decay) * feat_cos.mean()
-                        feat_total = feat_total[:, feat_cos >= self.queue_cos_mean[lb]]
-                        num_cos = feat_total.shape[1]
-                        K = min(K, num_cos)
-                        perm = torch.randperm(num_cos)
-                        feat = feat_total[:, perm[:K]]
-                        # _, index = torch.topk(feat_cos, k=K, dim=0)
-                        # feat = feat_total[:, index]
-                    else:
-                        perm = torch.randperm(num_pixel)
-                        # 关键的一步 之前没引用idxs
-                        feat = feat_total[:, perm[:K]]
-                    if length < memory_size:
-                        if ptr + K >= memory_size:
-                            self.seg_queue[lb] = torch.cat((self.seg_queue[lb], feat), dim=1)
-                            self.seg_queue[lb] = self.seg_queue[lb][:, -memory_size:]
-                            self.seg_queue_ptr[lb] = 0
-                        else:
-                            self.seg_queue[lb] = torch.cat((self.seg_queue[lb], feat), dim=1)
-                            self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + K) % memory_size
-                    else:
-                        if ptr + K >= memory_size:
-                            self.seg_queue[lb][:, -K:] = feat
-                            self.seg_queue_ptr[lb] = 0
-                        else:
-                            self.seg_queue[lb][:, ptr:ptr + K] = feat
-                            self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + K) % memory_size
-
-        if self.__len__() > 0:
-            self.mean_feature = torch.cat([torch.mean(f, dim=1, keepdim=True) for f in self.seg_queue], dim=1)
-            ratio = (torch.matmul(torch.transpose(self.mean_feature, 0, 1),
-                                  self.mean_feature)).sum() + self.class_num * (self.class_num - 1)
-            is_queue = True
-            with open('3.txt', 'a') as file:
-                file.write('separation active {}:{}\n'.format(is_queue, ratio))
-            return ratio, True
-        else:
-            return self.best_ratio, False
-
     def sample_queue_negative(self):
         X_ = torch.cat([l for l in self.seg_queue if l.shape[1] > 0], dim=1)
         X_ = torch.transpose(X_, 0, 1)
         y_ = torch.cat([i * torch.ones(self.seg_queue[i].shape[1]) for i in range(self.class_num) if
                         self.seg_queue[i].shape[1] > 0])
         return X_, y_
-
-    def _mean_feature(self):
-        X_ = torch.cat([torch.mean(f, dim=1, keepdim=True) for f in self.seg_queue], dim=1)
-        return X_
-
-
-def small_area(mask, N=50):
-    h, w = mask.shape
-    area = mask.sum()
-    if area == h * w:
-        mask_list = [mask.view(-1, 1)]
-        return mask_list
-    device = mask.device
-    mask_list = []
-    mask_dilate = mask
-    while area > 1 and len(mask_list) < N:
-        # 这里的3*3的腐蚀核与上面的area>1有关的，不然会导致出错
-        kernel = np.ones((3, 3), dtype=np.uint8)
-        mask_dilate_np = cv2.erode(mask_dilate.int().cpu().numpy().astype('uint8'), kernel).astype('int32')
-        mask_dilate = (torch.from_numpy(mask_dilate_np)).to(device).float()
-        tmp = (mask_dilate.view(-1) == 1).nonzero()
-        mask_list.append(tmp) if len(tmp) > 0 else None
-        tmp = ((mask - mask_dilate).view(-1) == 1).nonzero()
-        mask_list.append(tmp) if len(tmp) > 0 else None
-        area = mask_dilate.sum()
-    return mask_list
-
-
-class UnlabelFilter:
-    def __init__(self, total_iterations, start_value=0.1, end_value=0.9, method='log'):
-        self.total_iters = total_iterations
-        self.current_iter = 0
-        self.method = method
-        self.start_value = start_value
-        self.end_value = end_value
-
-    def get_parameter(self):
-        if self.method == 'exp':
-            decay_rate = self.end_value / self.start_value
-            parameter = self.start_value * (decay_rate ** (self.current_iter / self.total_iters))
-        elif self.method == 'log':
-            parameter = self.start_value + (
-                    (self.end_value - self.start_value) * math.log(1 + self.current_iter) / math.log(
-                1 + self.total_iters))
-        else:
-            progress = self.current_iter / self.total_iters
-            parameter = (1 - progress) * self.start_value + progress * self.end_value
-        self.current_iter += 1
-        return parameter
-
-    def __bool__(self):
-        return True
 
 
 class EvalModule:
@@ -934,7 +551,10 @@ class EvalFeat:
         self.right += tmp_right
 
     def indicator(self):
-        accuracy = self.right / self.all
+        try:
+            accuracy = self.right / self.all
+        except:
+            accuracy = 0
         self.all = 0
         self.right = 0
         return accuracy
@@ -973,6 +593,14 @@ def edge_interior(label_mask: torch.Tensor, ignore_mask: torch.Tensor, min_k=3, 
         mask_inters.append(mask_inter)
 
     return mask_edges, mask_inters
+
+
+def error_mask(tensor: torch.Tensor, N=2):
+    tensor_sum = tensor.sum(dim=1)
+    sum_mean = tensor_sum.mean()
+    sum_std = torch.std(tensor_sum, unbiased=False)
+    mask_error = tensor_sum < sum_mean - N * sum_std
+    return mask_error
 
 
 def plot_color(tensor):
