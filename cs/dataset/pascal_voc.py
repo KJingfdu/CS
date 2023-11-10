@@ -39,8 +39,8 @@ class voc_dset(BaseDataset):
         label_path = os.path.join(self.data_root, self.list_sample_new[index][1])
         image = self.img_loader(image_path, "RGB")
         label = Image.open(label_path)
-        image, label = self.transform(image, label)
-        return image[0], label[0, 0].long()
+        image, label, mask = self.transform(image, label)
+        return image[0], label[0, 0].long(), mask[0, 0]
 
     def __len__(self):
         return len(self.list_sample_new)
