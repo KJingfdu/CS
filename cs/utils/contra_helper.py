@@ -273,7 +273,9 @@ class MocoContrastLoss(nn.Module):
                 outs['mask'] = None
             outs['loss1'] = 0 * loss
             outs['loss2'] = 0 * loss
-        outs['loss'] = loss
+        outs['loss'] = loss.cuda()
+        outs['loss1'] = outs['loss1'].cuda()
+        outs['loss2'] = outs['loss2'].cuda()
         return outs
 
     def _contrastive(self, feats, feats_t, labels, unlabeled=False):
