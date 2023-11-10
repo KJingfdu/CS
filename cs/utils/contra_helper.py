@@ -308,12 +308,12 @@ class MocoContrastLoss(nn.Module):
             return None
         anchor_count = feats.shape[0]
         device = feats.device
-        # if anchor_count > 1200:
-        #     feats = feats.cpu()
-        #     feats_t = feats_t.cpu()
-        #     labels = labels.cpu()
-        #     device = 'cpu'
-        #     real_device = 'cuda'
+        if anchor_count > 1200:
+            feats = feats.cpu()
+            feats_t = feats_t.cpu()
+            labels = labels.cpu()
+            device = 'cpu'
+            real_device = 'cuda'
         labels = labels.contiguous().view(-1, 1)
 
         anchor_feature = feats
@@ -352,6 +352,10 @@ class MocoContrastLoss(nn.Module):
         neg_logits = torch.exp(logits) * neg_mask
         neg_logits = neg_logits.sum(1, keepdims=True)
         outs = self._cal_loss(logits, neg_logits, mask, unlabeled)
+        if anchor_count > 1200:
+            outs['loss'] = outs['loss'].to(real_device)
+            outs['loss1'] = outs['loss1'].to(real_device)
+            outs['loss1'] = outs['loss1'].to(real_device)
         return outs
 
     def forward(self, feats, feats_t, labels, predict, unlabeled=True, gtlabels=None):
