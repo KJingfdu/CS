@@ -30,6 +30,7 @@ class Compose(object):
 
     def __call__(self, image, label):
         valid = None
+        masks = torch.zeros((1, 1))
         for idx, t in enumerate(self.segtransforms):
             if idx < 5:
                 try:
@@ -267,7 +268,7 @@ class Crop(object):
 
             # 生成 True-False 掩码，表示填充部分
             mask = torch.zeros_like(label, dtype=torch.bool)
-            mask[:, :, pad_h_half:pad_h_half+h, pad_w_half:pad_w_half+w] = True
+            mask[:, :, pad_h_half:pad_h_half + h, pad_w_half:pad_w_half + w] = True
 
         # 获取填充后的图像的高度和宽度
         h, w = image.size()[-2:]
@@ -562,12 +563,12 @@ def generate_unsup_data(data, logits, feats, target, mask, gt_label=None, mode="
         if gt_label is not None:
             new_label.append(
                 (
-                    gt_label[i] * mix_mask + gt_label[(i + 1) % batch_size] * (1 - mix_mask)
+                        gt_label[i] * mix_mask + gt_label[(i + 1) % batch_size] * (1 - mix_mask)
                 ).unsqueeze(0)
             )
         new_mask.append(
             (
-                mask[i] * mix_mask + mask[(i + 1) % batch_size] * (1 - mix_mask)
+                    mask[i] * mix_mask + mask[(i + 1) % batch_size] * (1 - mix_mask)
             ).bool().unsqueeze(0)
         )
         new_logits.append(

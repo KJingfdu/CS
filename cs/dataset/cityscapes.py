@@ -44,7 +44,7 @@ class city_dset(BaseDataset):
         return len(self.list_sample_new)
 
 
-def build_transfrom(cfg):
+def build_transfrom(cfg, train=True):
     trs_form = []
     mean, std, ignore_label = cfg["mean"], cfg["std"], cfg["ignore_label"]
     trs_form.append(psp_trsform.ToTensor())
@@ -62,7 +62,7 @@ def build_transfrom(cfg):
         trs_form.append(psp_trsform.RandomGaussianBlur())
     if cfg.get("flip", False) and cfg.get("flip"):
         trs_form.append(psp_trsform.RandomHorizontalFlip())
-    if cfg.get("crop", False):
+    if cfg.get("crop", False) and train:
         crop_size, crop_type = cfg["crop"]["size"], cfg["crop"]["type"]
         trs_form.append(
             psp_trsform.Crop(crop_size, crop_type=crop_type, ignore_label=ignore_label)
@@ -89,7 +89,7 @@ def build_cityloader(split, all_cfg, seed=0):
     n_sup = cfg.get("n_sup", 2975)
 
     # build transform
-    trs_form = build_transfrom(cfg)
+    trs_form = build_transfrom(cfg, train=False)
     dset = city_dset(cfg["data_root"], cfg["data_list"], trs_form, seed, n_sup, split)
 
     # build sampler
