@@ -70,16 +70,16 @@ class MocoContrastLoss(nn.Module):
         y_ = torch.empty(0).cuda()
         Y_ = torch.empty(0).cuda()
         for ii in range(batch_size):
-            this_y = y[ii]
+            # this_y = y[ii]
             # 根据student model预测出的y进行mask的挑选,进而挑选hard-easy sample.
             this_y_s = y_hat[ii]
             # 图片中存在255的部分, 因为采样是根据预测结果进行的, 很可能会涉及255的部分
             ignore_mask = (this_y_s == 255)
             this_X = X[ii]
             this_X_t = X_t[ii]
-            this_y_ids = this_y.unique()
+            this_y_ids = this_y_s.unique()
             this_y_ids = [i for i in this_y_ids if not i == 255]
-            edge_mask, interior_mask = edge_interior(this_y, ignore_mask)
+            edge_mask, interior_mask = edge_interior(this_y_s, ignore_mask)
             # ignore的部分不予采样
             num_edge = [int(mask.sum()) for mask in edge_mask]
             num_interior = [int(mask.sum()) for mask in interior_mask]
