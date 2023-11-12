@@ -194,47 +194,47 @@ def main():
 
     # Start to train model
     for epoch in range(last_epoch, cfg_trainer["epochs"]):
-        # if cfg["trainer"]["contrastive"].get('method', 'u2pl') == 'u2pl':
-        #     # Training
-        #     train(
-        #         model,
-        #         model_teacher,
-        #         optimizer,
-        #         lr_scheduler,
-        #         sup_loss_fn,
-        #         train_loader_sup,
-        #         train_loader_unsup,
-        #         epoch,
-        #         tb_logger,
-        #         logger,
-        #         memobank=memobank,
-        #         queue_ptrlis=queue_ptrlis,
-        #         queue_size=queue_size,
-        #     )
-        # # 不使用U2PL
-        # else:
-        #     train(
-        #         model,
-        #         model_teacher,
-        #         optimizer,
-        #         lr_scheduler,
-        #         sup_loss_fn,
-        #         train_loader_sup,
-        #         train_loader_unsup,
-        #         epoch,
-        #         tb_logger,
-        #         logger,
-        #         contra_loss=contra_loss_fn,
-        #     )
-        #
-        # list1 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 25, 50, 75, 100, 150, 200]
-        # if epoch + 1 in list1:
-        #     features = contra_loss_fn.memory_bank.seg_queue
-        #     torch.save(features, './' + cfg['saver']['snapshot_dir'] + '/' + 'features_{}'.format(epoch + 1))
-        # sampling_num = contra_loss_fn.eval_bank.all
-        # accuracy = contra_loss_fn.eval_bank.indicator()
-        # tb_logger.add_scalar('sampling_num acc', sampling_num, epoch)
-        # tb_logger.add_scalar('sampling acc', accuracy, epoch)
+        if cfg["trainer"]["contrastive"].get('method', 'u2pl') == 'u2pl':
+            # Training
+            train(
+                model,
+                model_teacher,
+                optimizer,
+                lr_scheduler,
+                sup_loss_fn,
+                train_loader_sup,
+                train_loader_unsup,
+                epoch,
+                tb_logger,
+                logger,
+                memobank=memobank,
+                queue_ptrlis=queue_ptrlis,
+                queue_size=queue_size,
+            )
+        # 不使用U2PL
+        else:
+            train(
+                model,
+                model_teacher,
+                optimizer,
+                lr_scheduler,
+                sup_loss_fn,
+                train_loader_sup,
+                train_loader_unsup,
+                epoch,
+                tb_logger,
+                logger,
+                contra_loss=contra_loss_fn,
+            )
+
+        list1 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 25, 50, 75, 100, 150, 200]
+        if epoch + 1 in list1:
+            features = contra_loss_fn.memory_bank.seg_queue
+            torch.save(features, './' + cfg['saver']['snapshot_dir'] + '/' + 'features_{}'.format(epoch + 1))
+        sampling_num = contra_loss_fn.eval_bank.all
+        accuracy = contra_loss_fn.eval_bank.indicator()
+        tb_logger.add_scalar('sampling_num acc', sampling_num, epoch)
+        tb_logger.add_scalar('sampling acc', accuracy, epoch)
         # Validation
         if cfg_trainer["eval_on"]:
             if rank == 0:
