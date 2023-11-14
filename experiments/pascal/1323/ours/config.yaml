@@ -10,14 +10,14 @@ dataset: # Required.
     #rand_rotation: [-10.0, 10.0]
     crop:
       type: rand
-      size: [480, 480] # crop image with HxW size
+      size: [520, 520] # crop image with HxW size
   val:
     data_root: ./data/VOC2012
     data_list: ./data/splits/pascal/val.txt
     crop:
       type: center
       size: [469, 469] # crop image with HxW size
-  batch_size: 4
+  batch_size: 3
   n_sup: 1323
   noise_std: 0.1
   workers: 2
@@ -26,7 +26,7 @@ dataset: # Required.
   ignore_label: 255
 
 trainer: # Required.
-  epochs: 80
+  epochs: 60
   eval_on: True
   sup_only_epoch: 0
   optimizer:
@@ -60,7 +60,7 @@ trainer: # Required.
     memory_bank: True
     pixel_update_freq: 20
     memory_size: 2000
-    mode: 'N+A+F'
+    mode: 'N+A'
     strategy: 'boundary-interior'
 
 saver:
