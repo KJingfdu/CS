@@ -206,8 +206,12 @@ class MocoContrastLoss(nn.Module):
         outs = {}
         device = logits.device
         if self.mode == 'N':
+            diag_mask = torch.zeros_like(mask).scatter_(1, torch.arange(logits.shape[0]).view(-1, 1).cuda(), 1)
+            logits_self = (diag_mask * logits).sum(dim=1)
+            mask = mask - diag_mask
             logits_calmax = logits.masked_fill(~mask.bool(), -1 * 2 / self.temperature)
             logits_topn, _ = torch.topk(logits_calmax, k=self.topk, dim=1)
+            logits_topn = torch.cat((logits_topn, logits_self.unsqueeze(1)), dim=1)
             # if unlabeled:
             #     topn_sum = logits_topn.sum(dim=1)
             #     sum_mean = topn_sum.mean()
@@ -218,17 +222,21 @@ class MocoContrastLoss(nn.Module):
             #     outs['mask'] = mask_err
             log_prob = logits_topn - torch.log(torch.exp(logits_topn) + neg_logits)
             loss = - log_prob
-            loss = loss[~torch.isnan(loss)].sum() / (logits.shape[0] * self.topk)
+            loss = loss[~torch.isnan(loss)].sum() / (logits.shape[0] * (self.topk + 1))
             outs['loss1'] = 0 * loss
             outs['loss2'] = 0 * loss
         elif self.mode == 'N+A':
+            diag_mask = torch.zeros_like(mask).scatter_(1, torch.arange(logits.shape[0]).view(-1, 1).cuda(), 1)
+            logits_self = (diag_mask * logits).sum(dim=1)
+            mask = mask - diag_mask
             random_mask = torch.randint(0, 2, (logits.shape[0],), device=device).bool()
             logits_calmax = logits.masked_fill(~mask.bool(), -1 * 2 / self.temperature)
             # logits_topn = logits_calmax.max(dim=1).values.unsqueeze(1)
             logits_topn, _ = torch.topk(logits_calmax, k=self.topk, dim=1)
+            logits_topn = torch.cat((logits_topn, logits_self.unsqueeze(1)), dim=1)
             log_prob = logits_topn - torch.log(torch.exp(logits_topn) + neg_logits)
             loss1 = - log_prob[random_mask]
-            loss1 = loss1[~torch.isnan(loss1)].sum() / (logits.shape[0] * self.topk)
+            loss1 = loss1[~torch.isnan(loss1)].sum() / (logits.shape[0] * (self.topk + 1))
             logits = logits - torch.log(torch.exp(logits) + neg_logits)
             loss2 = - (mask * logits).sum(1) / mask.sum(1)
             loss2 = loss2[~random_mask]
