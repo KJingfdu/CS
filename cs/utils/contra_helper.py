@@ -22,7 +22,7 @@ class MocoContrastLoss(nn.Module):
         self.temperature = temperature
         self.ignore_label = ignore_label
         self.nclass = nclass
-        self.topk = 5
+        self.topk = 3
         self.max_views = [neg_num for _ in range(nclass)]
         if memory_bank:
             self.memory_bank = MoCoMemoryBank(nclass, memory_size, pixel_update_freq, feat_dim, device)
@@ -208,16 +208,17 @@ class MocoContrastLoss(nn.Module):
         if self.mode == 'N':
             logits_calmax = logits.masked_fill(~mask.bool(), -1 * 2 / self.temperature)
             logits_topn, _ = torch.topk(logits_calmax, k=self.topk, dim=1)
-            if unlabeled:
-                topn_sum = logits_topn.sum(dim=1)
-                sum_mean = topn_sum.mean()
-                sum_std = torch.std(topn_sum, unbiased=False)
-                mask_err = topn_sum < sum_mean - 3 * sum_std
-                logits_topn = logits_topn[~mask_err]
-                neg_logits = neg_logits[~mask_err]
-                outs['mask'] = mask_err
+            # if unlabeled:
+            #     topn_sum = logits_topn.sum(dim=1)
+            #     sum_mean = topn_sum.mean()
+            #     sum_std = torch.std(topn_sum, unbiased=False)
+            #     mask_err = topn_sum < sum_mean - 3 * sum_std
+            #     logits_topn = logits_topn[~mask_err]
+            #     neg_logits = neg_logits[~mask_err]
+            #     outs['mask'] = mask_err
             log_prob = logits_topn - torch.log(torch.exp(logits_topn) + neg_logits)
             loss = - log_prob
+            loss = loss[~torch.isnan(loss)].sum() / (logits.shape[0] * self.topk)
             outs['loss1'] = 0 * loss
             outs['loss2'] = 0 * loss
         elif self.mode == 'N+A':
@@ -388,7 +389,7 @@ class MocoContrastLoss(nn.Module):
             if labels_ is not None:
                 self.eval_bank.add(labels_, gtlabels_)
         else:
-            feats_, feats_t_, labels_ = sampling_strategy(feats, feats_t, labels, predict, unlabeled)
+            feats_, feats_t_, labels_ = self._semi_sampling(feats, feats_t, labels, predict, unlabeled)
         if feats_ is not None and feats_.shape[0] == 0:
             outs['loss'] = 0 * feats.sum()
             outs['loss1'] = 0 * feats.sum()
@@ -396,10 +397,10 @@ class MocoContrastLoss(nn.Module):
             return outs
         if self.memory_bank is not None:
             outs = self._contrastive_memory_bank(feats_, feats_t_, labels_, unlabeled)
-            if unlabeled and gtlabels is not None:
-                mask_err = outs['mask']
-                if mask_err is not None:
-                    self.eval_bank_2.add(labels_[mask_err], gtlabels_[mask_err])
+            # if unlabeled and gtlabels is not None:
+            #     mask_err = outs['mask']
+            #     if mask_err is not None:
+            #         self.eval_bank_2.add(labels_[mask_err], gtlabels_[mask_err])
         else:
             outs = self._contrastive(feats_, feats_t_, labels_, unlabeled)
         with torch.no_grad():
@@ -582,8 +583,8 @@ def edge_interior(label_mask: torch.Tensor, ignore_mask: torch.Tensor, min_k=3, 
         if len(label_unique) == 1:
             k = min_k
         else:
-            norm_area = (max_area - label_areas[label]) / (max_area - min_area)
-            k = int(min_k + norm_area * (max_k - min_k))
+            # norm_area = (max_area - label_areas[label]) / (max_area - min_area)
+            k = 5
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
         mask_eq = (label_mask == label).astype('uint8')
         # mask_dilate = cv2.dilate(mask_eq, kernel) - mask_eq
