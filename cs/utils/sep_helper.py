@@ -40,18 +40,9 @@ def gradient(vector, class_list, ignore_id=255):
 
 def gradient_descent(vector, class_list, learning_rate, num_iterations):
     vector_new = vector.clone()
-    # obj_old = separation_func(vector)
     for iteration in range(num_iterations):
         grad = gradient(vector_new, class_list)
         vector_new -= learning_rate * grad
-        # obj_new = separation_func(vector_new)
-        # if obj_new < obj_old:
-        #     if obj_old - obj_new < 0.01:
-        #         return vector_new
-        #     obj_old = obj_new
-        # else:
-        #     print('wrong')
-        #     obj_old = obj_new
     return vector_new
 
 
@@ -81,3 +72,30 @@ def separation(seg_queue_new, seg_queue_old=None, n=19 * 18, best_ratio=0):
         feats_new = F.normalize(feats_new, dim=0)
         separate_ratio_new = (torch.matmul(torch.transpose(feats_new, 0, 1), feats_new)).sum() + n
         return True, separate_ratio_new, feats_new
+
+
+def main():
+    # 假设有一些输入数据，这里用随机生成的数据作为示例
+    num_classes = 19
+    num_features = 256
+    num_segments = 100
+    seg_queue_new = [torch.randn(num_features, num_segments) for _ in range(num_classes)]
+
+    # 初始化向量
+    vector_init = torch.randn(num_features, num_classes)
+
+    # 设置学习率和迭代次数
+    learning_rate = 0.01
+    num_iterations = 1000
+
+    # 运行梯度下降优化过程
+    optimized_vector = gradient_descent(vector_init, list(range(num_classes)), learning_rate, num_iterations)
+
+    separ = separation_func(optimized_vector)
+    # 输出优化后的向量
+    print("优化后的向量:")
+    print(optimized_vector)
+    print('separ', separ)
+
+if __name__ == "__main__":
+    main()
