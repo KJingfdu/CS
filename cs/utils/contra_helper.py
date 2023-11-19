@@ -413,7 +413,10 @@ class MocoContrastLoss(nn.Module):
             outs = self._contrastive(feats_, feats_t_, labels_, unlabeled)
         with torch.no_grad():
             if self.memory_bank is not None:
-                self.memory_bank.dequeue_enqueue(feats_t_, labels_, unlabeled)
+                if unlabeled:
+                    self.memory_bank.dequeue_enqueue(feats_t_, labels_, gtlabels_, unlabeled)
+                else:
+                    self.memory_bank.dequeue_enqueue(feats_t_, labels_, labels_, unlabeled)
         return outs
 
 
@@ -424,6 +427,7 @@ class MoCoMemoryBank:
         self.feat_dim = feat_dim
         self.device = device
         self.seg_queue = [torch.empty((feat_dim, 0)).to(self.device) for _ in range(class_num)]
+        self.gt_queue = [torch.empty((0, )).to(self.device) for _ in range(class_num)]
         self.seg_queue_ptr = torch.zeros(class_num, dtype=torch.long).to(self.device)
         self.class_num = class_num
         self.memory_size = memory_size
@@ -445,7 +449,7 @@ class MoCoMemoryBank:
             length += tmp_len
         return length
 
-    def dequeue_enqueue(self, feats, labels, unlabeled=False):
+    def dequeue_enqueue(self, feats, labels, gtlabels=None, unlabeled=False):
         memory_size = self.memory_size
         with torch.no_grad():
             this_label_ids = torch.unique(labels)
@@ -457,15 +461,15 @@ class MoCoMemoryBank:
                 idxs = (labels == lb).nonzero()
 
                 # total area enqueue and dequeue
-                feat = torch.mean(feats[:, idxs].squeeze(2), dim=1)
-                ptr = int(self.seg_queue_ptr[lb])
-                length = self.seg_queue[lb].shape[1]
-                if length < memory_size:
-                    self.seg_queue[lb] = torch.cat((self.seg_queue[lb], F.normalize(feat, p=2, dim=0).unsqueeze(1)),
-                                                   dim=1)
-                else:
-                    self.seg_queue[lb][:, ptr] = F.normalize(feat, p=2, dim=0)
-                    self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + 1) % memory_size
+                # feat = torch.mean(feats[:, idxs].squeeze(2), dim=1)
+                # ptr = int(self.seg_queue_ptr[lb])
+                # length = self.seg_queue[lb].shape[1]
+                # if length < memory_size:
+                #     self.seg_queue[lb] = torch.cat((self.seg_queue[lb], F.normalize(feat, p=2, dim=0).unsqueeze(1)),
+                #                                    dim=1)
+                # else:
+                #     self.seg_queue[lb][:, ptr] = F.normalize(feat, p=2, dim=0)
+                #     self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + 1) % memory_size
 
                 # pixel enqueue and dequeue
                 # 关键的一步 之前没引用idxs
@@ -474,6 +478,7 @@ class MoCoMemoryBank:
                 K = min(num_pixel, self.pixel_update_freq)
                 # 关键的一步 之前没引用idxs
                 feat = feats[:, idxs[perm[:K], 0]]
+                gt_ = gtlabels[idxs[perm[:K], 0]]
                 ptr = int(self.seg_queue_ptr[lb])
                 length = self.seg_queue[lb].shape[1]
                 if length < memory_size:
@@ -481,16 +486,25 @@ class MoCoMemoryBank:
                         self.seg_queue[lb] = torch.cat((self.seg_queue[lb], feat), dim=1)
                         self.seg_queue[lb] = self.seg_queue[lb][:, -memory_size:]
                         self.seg_queue_ptr[lb] = 0
+                        if gtlabels is not None:
+                            self.gt_queue[lb] = torch.cat((self.gt_queue[lb], gt_))
+                            self.gt_queue[lb] = self.gt_queue[lb][-memory_size:]
                     else:
                         self.seg_queue[lb] = torch.cat((self.seg_queue[lb], feat), dim=1)
                         self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + K) % memory_size
+                        if gtlabels is not None:
+                            self.gt_queue[lb] = torch.cat((self.gt_queue[lb], gt_))
                 else:
                     if ptr + K >= memory_size:
                         self.seg_queue[lb][:, -K:] = feat
                         self.seg_queue_ptr[lb] = 0
+                        if gtlabels is not None:
+                            self.gt_queue[lb][-K:] = gt_
                     else:
                         self.seg_queue[lb][:, ptr:ptr + K] = feat
                         self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + K) % memory_size
+                        if gtlabels is not None:
+                            self.gt_queue[lb][ptr:ptr + K] = gt_
 
         if self.__len__() > 0:
             self.mean_feature = torch.cat([torch.mean(f, dim=1, keepdim=True) for f in self.seg_queue], dim=1)

@@ -230,7 +230,9 @@ def main():
         list1 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 25, 50, 75, 100, 150, 200]
         if epoch + 1 in list1:
             features = contra_loss_fn.memory_bank.seg_queue
+            gts = contra_loss_fn.memory_bank.gt_queue
             torch.save(features, './' + cfg['saver']['snapshot_dir'] + '/' + 'features_{}'.format(epoch + 1))
+            torch.save(gts, './' + cfg['saver']['snapshot_dir'] + '/' + 'gt_{}'.format(epoch + 1))
         sampling_num = contra_loss_fn.eval_bank.all
         accuracy = contra_loss_fn.eval_bank.indicator()
         tb_logger.add_scalar('sampling_num acc', sampling_num, epoch)
