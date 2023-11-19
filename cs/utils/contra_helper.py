@@ -206,7 +206,7 @@ class MocoContrastLoss(nn.Module):
         outs = {}
         device = logits.device
         if self.mode == 'N':
-            diag_mask = torch.zeros_like(mask).scatter_(1, torch.arange(logits.shape[0]).view(-1, 1).cuda(), 1)
+            diag_mask = torch.zeros_like(mask).scatter_(1, torch.arange(logits.shape[0]).view(-1, 1).to(device), 1)
             logits_self = (diag_mask * logits).sum(dim=1)
             mask = mask - diag_mask
             logits_calmax = logits.masked_fill(~mask.bool(), -1 * 2 / self.temperature)
@@ -226,7 +226,7 @@ class MocoContrastLoss(nn.Module):
             outs['loss1'] = 0 * loss
             outs['loss2'] = 0 * loss
         elif self.mode == 'N+A':
-            diag_mask = torch.zeros_like(mask).scatter_(1, torch.arange(logits.shape[0]).view(-1, 1).cuda(), 1)
+            diag_mask = torch.zeros_like(mask).scatter_(1, torch.arange(logits.shape[0]).view(-1, 1).to(device), 1)
             logits_self = (diag_mask * logits).sum(dim=1)
             mask = mask - diag_mask
             random_mask = torch.randint(0, 2, (logits.shape[0],), device=device).bool()
