@@ -45,7 +45,6 @@ parser.add_argument("--config", type=str, default="experiments/pascal/1323/ours/
 parser.add_argument("--local_rank", type=int, default=0)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--port", default=None, type=int)
-parser.add_argument('--inspect', default=False, type=bool)
 
 
 def main():
@@ -56,11 +55,6 @@ def main():
 
     logger = init_log("global", logging.INFO)
     logger.propagate = 0
-    if args.inspect:
-        global recal_iters, store_bank_labeled, store_bank_unlabeled
-        recal_iters = 2000 / 20 / 2 / 2
-        store_bank_labeled = [[], []]
-        store_bank_unlabeled = [[], []]
 
     cfg["exp_path"] = os.path.dirname(args.config)
     cfg["save_path"] = os.path.join(cfg["exp_path"], cfg["saver"]["snapshot_dir"])
@@ -227,7 +221,10 @@ def main():
                 contra_loss=contra_loss_fn,
             )
 
-        list1 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 25, 50, 75, 100, 150, 200]
+        torch.cuda.empty_cache()
+        torch.cuda.empty_cache()
+        torch.cuda.empty_cache()
+        list1 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 50, 75, 100, 150, 200]
         if epoch + 1 in list1:
             features = contra_loss_fn.memory_bank.seg_queue
             gts = contra_loss_fn.memory_bank.gt_queue
@@ -576,7 +573,7 @@ def train(
                         contra_loss2 = torch.Tensor(0)
                     label_u_aug[mask_u_aug] = 255
                     contra_loss_outs = contra_loss_fn(torch.nn.functional.normalize(rep_all[num_labeled:], dim=1),
-                                                      torch.nn.functional.normalize(rep_all_teacher[num_labeled:], dim=1),
+                                                      torch.nn.functional.normalize(rep_u_t_aug, dim=1),
                                                       label_u_aug,
                                                       predict_label[num_labeled:],
                                                       unlabeled=True,
@@ -670,40 +667,6 @@ def train(
             tb_logger.add_scalar("Con Loss", con_losses.avg, i_iter)
             tb_logger.add_scalar("Con Loss1", con_losses_1.avg, i_iter)
             tb_logger.add_scalar("Con Loss2", con_losses_2.avg, i_iter)
-
-        # global recal_iters, store_bank_labeled, store_bank_unlabeled
-        if args.inspect:
-            with torch.no_grad():
-                if len(store_bank_labeled[0]) and not i_iter % recal_iters == 0:
-                    feats_l_old = store_bank_labeled[0]
-                    image_l_old = store_bank_labeled[1]
-                    model.eval()
-                    outs = model(image_l_old)
-                    rep_l_new = outs["rep"]
-                    feats_l_new = torch.nn.functional.normalize(rep_l_new, dim=1)
-                    a = indicator_cal(feats_l_old, feats_l_new)
-                    with open('2.txt', 'a') as file:
-                        file.write('label: min:{} max:{} mean:{}\n'.format(a[0], a[1], a[2]))
-                else:
-                    with open('2.txt', 'a') as file:
-                        file.write('label next\n')
-                    store_bank_labeled[0] = torch.nn.functional.normalize(rep_all[:num_labeled], dim=1)
-                    store_bank_labeled[1] = image_l
-                if len(store_bank_unlabeled[0]) and not i_iter % recal_iters == 0:
-                    feats_u_old = store_bank_unlabeled[0]
-                    image_u_old = store_bank_unlabeled[1]
-                    model.eval()
-                    outs = model(image_u_old)
-                    rep_u_new = outs["rep"]
-                    feats_u_new = torch.nn.functional.normalize(rep_u_new, dim=1)
-                    a = indicator_cal(feats_u_old, feats_u_new)
-                    with open('4.txt', 'a') as file:
-                        file.write('unlabel: min:{} max:{} mean:{}\n'.format(a[0], a[1], a[2]))
-                else:
-                    with open('4.txt', 'a') as file:
-                        file.write('unlabel next\n')
-                    store_bank_unlabeled[0] = torch.nn.functional.normalize(rep_all[num_labeled:], dim=1)
-                    store_bank_unlabeled[1] = image_u_aug
 
 
 def validate(
