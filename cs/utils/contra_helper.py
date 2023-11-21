@@ -348,11 +348,14 @@ class MocoContrastLoss(nn.Module):
         # 这个mask是计算i与i+的关键部分。
         # mask = mask * logits_mask
         if memory_bank_use:
+            contrast_labels = torch.cat([contrast_labels, contrast_labels_que])
             mask_que = torch.eq(labels, torch.transpose(contrast_labels_que, 0, 1)).float().to(device)
-            neg_mask_que = 1 - mask_que
             mask = torch.cat([mask, mask_que], dim=1)
-            neg_mask = torch.cat([neg_mask, neg_mask_que], dim=1)
             contrast_feature = torch.cat([contrast_feature, contrast_feature_que])
+            pseudo_mask = self._get_pseudo_mask(anchor_feature, labels, contrast_labels)
+            neglect_mask = ~(pseudo_mask.sum(dim=1).bool())
+            mask = mask + pseudo_mask
+            neg_mask = 1 - mask
 
         anchor_dot_contrast = torch.div(torch.matmul(anchor_feature, torch.transpose(contrast_feature, 0, 1)),
                                         self.temperature)
@@ -363,17 +366,20 @@ class MocoContrastLoss(nn.Module):
         neg_logits = torch.exp(logits) * neg_mask
         neg_logits = neg_logits.sum(1, keepdims=True)
         outs = self._cal_loss(logits, neg_logits, mask, unlabeled)
+        if memory_bank_use:
+            outs['neglect_mask'] = neglect_mask
         if anchor_count > 1200:
             outs['loss'] = outs['loss'].to(real_device)
             outs['loss1'] = outs['loss1'].to(real_device)
             outs['loss1'] = outs['loss1'].to(real_device)
         return outs
 
-    def _get_negative_mask(self, anchor_feats, labels, contrast_labels):
-        dot_ = torch.mm(anchor_feats, self.memory_bank.mean_features)
-        mask1 = dot_ > dot_[labels]
-        contrast_labels_mask = F.one_hot(contrast_labels)
-        mask = torch.mm(mask1, contrast_labels_mask)
+    def _get_pseudo_mask(self, anchor_feats, labels, contrast_labels):
+        dot_ = torch.mm(anchor_feats, self.memory_bank.mean_feature)
+        labels_mask = F.one_hot(labels.long().squeeze(), num_classes=self.nclass).bool()
+        mask1 = (dot_ > dot_[labels_mask].unsqueeze(1).expand(-1, self.nclass)).long()
+        contrast_labels_mask = F.one_hot(contrast_labels.long().squeeze(), num_classes=self.nclass)
+        mask = torch.mm(mask1, contrast_labels_mask.T)
         return mask
 
     def forward(self, feats, feats_t, labels, predict, unlabeled=True, gtlabels=None):
