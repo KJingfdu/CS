@@ -369,6 +369,13 @@ class MocoContrastLoss(nn.Module):
             outs['loss1'] = outs['loss1'].to(real_device)
         return outs
 
+    def _get_negative_mask(self, anchor_feats, labels, contrast_labels):
+        dot_ = torch.mm(anchor_feats, self.memory_bank.mean_features)
+        mask1 = dot_ > dot_[labels]
+        contrast_labels_mask = F.one_hot(contrast_labels)
+        mask = torch.mm(mask1, contrast_labels_mask)
+        return mask
+
     def forward(self, feats, feats_t, labels, predict, unlabeled=True, gtlabels=None):
         outs = {}
         batchsize, _, h, w = feats.shape
@@ -427,7 +434,7 @@ class MoCoMemoryBank:
         self.feat_dim = feat_dim
         self.device = device
         self.seg_queue = [torch.empty((feat_dim, 0)).to(self.device) for _ in range(class_num)]
-        self.gt_queue = [torch.empty((0, )).to(self.device) for _ in range(class_num)]
+        self.gt_queue = [torch.empty((0,)).to(self.device) for _ in range(class_num)]
         self.seg_queue_ptr = torch.zeros(class_num, dtype=torch.long).to(self.device)
         self.class_num = class_num
         self.memory_size = memory_size
