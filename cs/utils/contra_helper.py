@@ -379,12 +379,13 @@ class MocoContrastLoss(nn.Module):
         labels_mask = F.one_hot(labels.long().squeeze(), num_classes=self.nclass).bool()
         mask1 = (dot_ > dot_[labels_mask].unsqueeze(1).expand(-1, self.nclass)).long()
         contrast_labels_mask = F.one_hot(contrast_labels.long().squeeze(), num_classes=self.nclass)
-        mask = torch.mm(mask1, contrast_labels_mask.T)
+        mask = torch.mm(mask1.float(), contrast_labels_mask.T.float())
         return mask
 
     def forward(self, feats, feats_t, labels, predict, unlabeled=True, gtlabels=None):
         outs = {}
         batchsize, _, h, w = feats.shape
+        device = feats.device
         labels = labels.unsqueeze(1).float().clone()
         labels = torch.nn.functional.interpolate(labels, (feats.shape[2], feats.shape[3]), mode='nearest')
         if gtlabels is not None:
@@ -426,10 +427,16 @@ class MocoContrastLoss(nn.Module):
             outs = self._contrastive(feats_, feats_t_, labels_, unlabeled)
         with torch.no_grad():
             if self.memory_bank is not None:
+                try:
+                    neglect_mask = outs['neglect_mask']
+                except:
+                    neglect_mask = torch.ones((feats_t_.shape[0],), device=device).bool()
                 if unlabeled:
-                    self.memory_bank.dequeue_enqueue(feats_t_, labels_, gtlabels_, unlabeled)
+                    self.memory_bank.dequeue_enqueue(feats_t_[neglect_mask], labels_[neglect_mask],
+                                                     gtlabels_[neglect_mask], unlabeled)
                 else:
-                    self.memory_bank.dequeue_enqueue(feats_t_, labels_, labels_, unlabeled)
+                    self.memory_bank.dequeue_enqueue(feats_t_[neglect_mask], labels_[neglect_mask],
+                                                     labels_[neglect_mask], unlabeled)
         return outs
 
 
