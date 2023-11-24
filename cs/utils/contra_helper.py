@@ -352,9 +352,10 @@ class MocoContrastLoss(nn.Module):
             mask_que = torch.eq(labels, torch.transpose(contrast_labels_que, 0, 1)).float().to(device)
             mask = torch.cat([mask, mask_que], dim=1)
             contrast_feature = torch.cat([contrast_feature, contrast_feature_que])
-            pseudo_mask = self._get_pseudo_mask(anchor_feature, labels, contrast_labels)
-            neglect_mask = ~(pseudo_mask.sum(dim=1).bool())
-            mask = mask + pseudo_mask
+            if unlabeled:
+                pseudo_mask, dot_ = self._get_pseudo_mask(anchor_feature, labels, contrast_labels)
+                neglect_mask = ~(pseudo_mask.sum(dim=1).bool())
+                mask = mask + pseudo_mask
             neg_mask = 1 - mask
 
         anchor_dot_contrast = torch.div(torch.matmul(anchor_feature, torch.transpose(contrast_feature, 0, 1)),
@@ -366,8 +367,9 @@ class MocoContrastLoss(nn.Module):
         neg_logits = torch.exp(logits) * neg_mask
         neg_logits = neg_logits.sum(1, keepdims=True)
         outs = self._cal_loss(logits, neg_logits, mask, unlabeled)
-        if memory_bank_use:
+        if memory_bank_use and unlabeled:
             outs['neglect_mask'] = neglect_mask
+            outs['dot_'] = dot_
         if anchor_count > 1200:
             outs['loss'] = outs['loss'].to(real_device)
             outs['loss1'] = outs['loss1'].to(real_device)
@@ -375,12 +377,13 @@ class MocoContrastLoss(nn.Module):
         return outs
 
     def _get_pseudo_mask(self, anchor_feats, labels, contrast_labels):
-        dot_ = torch.mm(anchor_feats, self.memory_bank.mean_feature)
+        device = anchor_feats.device
+        dot_ = torch.mm(anchor_feats, self.memory_bank.mean_feature.to(device))
         labels_mask = F.one_hot(labels.long().squeeze(), num_classes=self.nclass).bool()
         mask1 = (dot_ > dot_[labels_mask].unsqueeze(1).expand(-1, self.nclass)).long()
         contrast_labels_mask = F.one_hot(contrast_labels.long().squeeze(), num_classes=self.nclass)
         mask = torch.mm(mask1.float(), contrast_labels_mask.T.float())
-        return mask
+        return mask, dot_
 
     def forward(self, feats, feats_t, labels, predict, unlabeled=True, gtlabels=None):
         outs = {}
@@ -419,6 +422,16 @@ class MocoContrastLoss(nn.Module):
             return outs
         if self.memory_bank is not None:
             outs = self._contrastive_memory_bank(feats_, feats_t_, labels_, unlabeled)
+            if unlabeled and len(self.memory_bank) > 0:
+                dot_ = outs['dot_']
+                # labels_one_hot = F.one_hot(labels_.long(), num_classes=self.nclass)
+                # mask1 = (dot_ > dot_[labels_one_hot.bool()].unsqueeze(1).expand(-1, self.nclass)).long()
+                # rect_right = (F.one_hot(gtlabels_.long(), num_classes=self.nclass) * mask1).sum(dim=1)
+                # rect_right_num = rect_right.sum()
+                # surplus_right_num = (labels_[~rect_right.bool()] == gtlabels_[~rect_right.bool()]).sum()
+                # original_right_num = (labels_ == gtlabels_).sum()
+                # original_wrong_num = (labels_ != gtlabels_).sum()
+
             # if unlabeled and gtlabels is not None:
             #     mask_err = outs['mask']
             #     if mask_err is not None:
