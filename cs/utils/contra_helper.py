@@ -377,12 +377,17 @@ class MocoContrastLoss(nn.Module):
         return outs
 
     def _get_pseudo_mask(self, anchor_feats, labels, contrast_labels):
-        device = anchor_feats.device
-        dot_ = torch.mm(anchor_feats, self.memory_bank.mean_feature.to(device))
-        labels_mask = F.one_hot(labels.long().squeeze(), num_classes=self.nclass).bool()
-        mask1 = (dot_ > dot_[labels_mask].unsqueeze(1).expand(-1, self.nclass)).long()
-        contrast_labels_mask = F.one_hot(contrast_labels.long().squeeze(), num_classes=self.nclass)
-        mask = torch.mm(mask1.float(), contrast_labels_mask.T.float())
+        our_anchor = anchor_feats.clone()
+        with torch.no_grad():
+            device = our_anchor.device
+            dot_ = torch.mm(our_anchor, self.memory_bank.mean_feature.to(device))
+            labels_mask = F.one_hot(labels.long().squeeze(), num_classes=self.nclass).bool()
+            mask1 = (dot_ > dot_[labels_mask].unsqueeze(1).expand(-1, self.nclass)).long()
+            dot_.masked_fill(~mask1.bool(), -1)
+            _, topn_index = torch.topk(dot_, k=3)
+            mask_class = F.one_hot(topn_index.long().squeeze(), num_classes=self.nclass).sum(dim=1)
+            contrast_labels_mask = F.one_hot(contrast_labels.long().squeeze(), num_classes=self.nclass)
+            mask = torch.mm(mask_class.float(), contrast_labels_mask.T.float())
         return mask, dot_
 
     def forward(self, feats, feats_t, labels, predict, unlabeled=True, gtlabels=None):
