@@ -383,9 +383,9 @@ class MocoContrastLoss(nn.Module):
             dot_ = torch.mm(our_anchor, self.memory_bank.mean_feature.to(device))
             labels_mask = F.one_hot(labels.long().squeeze(), num_classes=self.nclass).bool()
             mask1 = (dot_ > dot_[labels_mask].unsqueeze(1).expand(-1, self.nclass)).long()
-            dot_.masked_fill(~mask1.bool(), -1)
+            dot_ = dot_.masked_fill(~mask1.bool(), -1)
             _, topn_index = torch.topk(dot_, k=3)
-            mask_class = F.one_hot(topn_index.long().squeeze(), num_classes=self.nclass).sum(dim=1)
+            mask_class = F.one_hot(topn_index.long().squeeze(), num_classes=self.nclass).sum(dim=1) * mask1
             contrast_labels_mask = F.one_hot(contrast_labels.long().squeeze(), num_classes=self.nclass)
             mask = torch.mm(mask_class.float(), contrast_labels_mask.T.float())
         return mask, dot_
