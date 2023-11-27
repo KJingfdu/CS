@@ -466,6 +466,7 @@ class MoCoMemoryBank:
         self.device = device
         self.seg_queue = [torch.empty((feat_dim, 0)).to(self.device) for _ in range(class_num)]
         self.gt_queue = [torch.empty((0,)).to(self.device) for _ in range(class_num)]
+        self.islabel_queue = [torch.empty((0,)).to(self.device) for _ in range(class_num)]
         self.seg_queue_ptr = torch.zeros(class_num, dtype=torch.long).to(self.device)
         self.class_num = class_num
         self.memory_size = memory_size
@@ -489,6 +490,10 @@ class MoCoMemoryBank:
 
     def dequeue_enqueue(self, feats, labels, gtlabels=None, unlabeled=False):
         memory_size = self.memory_size
+        if unlabeled:
+            Func = torch.zeros_like
+        else:
+            Func = torch.ones_like
         with torch.no_grad():
             this_label_ids = torch.unique(labels)
             # this_label_ids = [x for x in this_label_ids if x > 0 and not x == 255]
@@ -524,23 +529,28 @@ class MoCoMemoryBank:
                         self.seg_queue[lb] = torch.cat((self.seg_queue[lb], feat), dim=1)
                         self.seg_queue[lb] = self.seg_queue[lb][:, -memory_size:]
                         self.seg_queue_ptr[lb] = 0
+                        self.islabel_queue[lb] = torch.cat((self.islabel_queue[lb], Func(gt_)))
+                        self.islabel_queue[lb] = self.islabel_queue[lb][-memory_size:]
                         if gtlabels is not None:
                             self.gt_queue[lb] = torch.cat((self.gt_queue[lb], gt_))
                             self.gt_queue[lb] = self.gt_queue[lb][-memory_size:]
                     else:
                         self.seg_queue[lb] = torch.cat((self.seg_queue[lb], feat), dim=1)
                         self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + K) % memory_size
+                        self.islabel_queue[lb] = torch.cat((self.islabel_queue[lb], Func(gt_)))
                         if gtlabels is not None:
                             self.gt_queue[lb] = torch.cat((self.gt_queue[lb], gt_))
                 else:
                     if ptr + K >= memory_size:
                         self.seg_queue[lb][:, -K:] = feat
                         self.seg_queue_ptr[lb] = 0
+                        self.islabel_queue[lb][-K:] = Func(gt_)
                         if gtlabels is not None:
                             self.gt_queue[lb][-K:] = gt_
                     else:
                         self.seg_queue[lb][:, ptr:ptr + K] = feat
                         self.seg_queue_ptr[lb] = (self.seg_queue_ptr[lb] + K) % memory_size
+                        self.islabel_queue[lb][ptr:ptr + K] = Func(gt_)
                         if gtlabels is not None:
                             self.gt_queue[lb][ptr:ptr + K] = gt_
 
