@@ -18,7 +18,7 @@ class MocoContrastLoss(nn.Module):
         super(MocoContrastLoss, self).__init__()
         # mode can only be chosed from ['N', 'A', 'N+A', 'N+A+F']
         self.strategy = strategy if strategy in ['random', 'semi-hard', 'boundary-interior'] else 'boundary-interior'
-        self.mode = mode if mode in ['N', 'A', 'N+A', 'N+A+F'] else 'N+A'
+        self.mode = mode if mode in ['N', 'A', 'S', 'N+A'] else 'N'
         self.temperature = temperature
         self.ignore_label = ignore_label
         self.nclass = nclass
@@ -240,8 +240,7 @@ class MocoContrastLoss(nn.Module):
             outs['loss2'] = loss2
         elif self.mode == 'S':
             diag_mask = torch.zeros_like(mask).scatter_(1, torch.arange(logits.shape[0]).view(-1, 1).to(device), 1)
-            logits_self = (diag_mask * logits).sum(dim=1)
-            neg_logits = torch.exp(logits) * (1 - diag_mask)
+            logits_self = (diag_mask * logits).sum(dim=1).unsqueeze(1)
             log_prob = logits_self - torch.log(torch.exp(logits_self) + neg_logits)
             loss = - log_prob
             loss = loss[~torch.isnan(loss)].sum() / (logits.shape[0] * (self.topk + 1))
