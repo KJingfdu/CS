@@ -212,14 +212,6 @@ class MocoContrastLoss(nn.Module):
             logits_calmax = logits.masked_fill(~mask.bool(), -1 * 2 / self.temperature)
             logits_topn, _ = torch.topk(logits_calmax, k=self.topk, dim=1)
             logits_topn = torch.cat((logits_topn, logits_self.unsqueeze(1)), dim=1)
-            # if unlabeled:
-            #     topn_sum = logits_topn.sum(dim=1)
-            #     sum_mean = topn_sum.mean()
-            #     sum_std = torch.std(topn_sum, unbiased=False)
-            #     mask_err = topn_sum < sum_mean - 3 * sum_std
-            #     logits_topn = logits_topn[~mask_err]
-            #     neg_logits = neg_logits[~mask_err]
-            #     outs['mask'] = mask_err
             log_prob = logits_topn - torch.log(torch.exp(logits_topn) + neg_logits)
             loss = - log_prob
             loss = loss[~torch.isnan(loss)].sum() / (logits.shape[0] * (self.topk + 1))
@@ -246,32 +238,15 @@ class MocoContrastLoss(nn.Module):
                 outs['mask'] = None
             outs['loss1'] = loss1
             outs['loss2'] = loss2
-        elif self.mode == 'N+A+F':
-            random_mask = torch.randint(0, 2, (logits.shape[0],), device=device)
-            logits_calmax = logits.masked_fill(~mask.bool(), -1 * 2 / self.temperature)
-            # logits_topn = logits_calmax.max(dim=1).values.unsqueeze(1)
-            logits_topn, _ = torch.topk(logits_calmax, k=self.topk, dim=1)
-            if unlabeled:
-                err1 = error_mask(logits_topn).int()
-                err2 = error_mask(logits).int()
-                mask_err1 = (err1 * random_mask)
-                mask_err2 = (err2 * (1 - random_mask))
-                outs['mask'] = (mask_err1 + mask_err2).bool()
-                mask_err1 = ((1 - err1) * random_mask).bool()
-                mask_err2 = ((1 - err2) * (1 - random_mask)).bool()
-            else:
-                mask_err1 = random_mask.bool()
-                mask_err2 = ~(random_mask.bool())
-            log_prob = logits_topn - torch.log(torch.exp(logits_topn) + neg_logits)
-            loss1 = - log_prob[~mask_err1]
-            loss1 = loss1[~torch.isnan(loss1)].sum() / (logits.shape[0] * self.topk)
-            logits = logits - torch.log(torch.exp(logits) + neg_logits)
-            loss2 = - (mask * logits).sum(1) / mask.sum(1)
-            loss2 = loss2[~mask_err2]
-            loss2 = loss2[~torch.isnan(loss2)].sum() / logits.shape[0]
-            loss = loss1 + loss2
-            outs['loss1'] = loss1
-            outs['loss2'] = loss2
+        elif self.mode == 'S':
+            diag_mask = torch.zeros_like(mask).scatter_(1, torch.arange(logits.shape[0]).view(-1, 1).to(device), 1)
+            logits_self = (diag_mask * logits).sum(dim=1)
+            neg_logits = torch.exp(logits) * (1 - diag_mask)
+            log_prob = logits_self - torch.log(torch.exp(logits_self) + neg_logits)
+            loss = - log_prob
+            loss = loss[~torch.isnan(loss)].sum() / (logits.shape[0] * (self.topk + 1))
+            outs['loss1'] = 0 * loss
+            outs['loss2'] = 0 * loss
         elif self.mode == 'A':
             logits = logits - torch.log(torch.exp(logits) + neg_logits)
             loss = - (mask * logits).sum(1) / mask.sum(1)
@@ -352,10 +327,6 @@ class MocoContrastLoss(nn.Module):
             mask_que = torch.eq(labels, torch.transpose(contrast_labels_que, 0, 1)).float().to(device)
             mask = torch.cat([mask, mask_que], dim=1)
             contrast_feature = torch.cat([contrast_feature, contrast_feature_que])
-            if unlabeled:
-                pseudo_mask, dot_ = self._get_pseudo_mask(anchor_feature, labels, contrast_labels)
-                neglect_mask = ~(pseudo_mask.sum(dim=1).bool())
-                mask = mask + pseudo_mask
             neg_mask = 1 - mask
 
         anchor_dot_contrast = torch.div(torch.matmul(anchor_feature, torch.transpose(contrast_feature, 0, 1)),
@@ -367,9 +338,6 @@ class MocoContrastLoss(nn.Module):
         neg_logits = torch.exp(logits) * neg_mask
         neg_logits = neg_logits.sum(1, keepdims=True)
         outs = self._cal_loss(logits, neg_logits, mask, unlabeled)
-        if memory_bank_use and unlabeled:
-            outs['neglect_mask'] = neglect_mask
-            outs['dot_'] = dot_
         if anchor_count > 1200:
             outs['loss'] = outs['loss'].to(real_device)
             outs['loss1'] = outs['loss1'].to(real_device)
@@ -427,15 +395,13 @@ class MocoContrastLoss(nn.Module):
             return outs
         if self.memory_bank is not None:
             outs = self._contrastive_memory_bank(feats_, feats_t_, labels_, unlabeled)
-            if unlabeled and len(self.memory_bank) > 0:
-                dot_ = outs['dot_']
-                # labels_one_hot = F.one_hot(labels_.long(), num_classes=self.nclass)
-                # mask1 = (dot_ > dot_[labels_one_hot.bool()].unsqueeze(1).expand(-1, self.nclass)).long()
-                # rect_right = (F.one_hot(gtlabels_.long(), num_classes=self.nclass) * mask1).sum(dim=1)
-                # rect_right_num = rect_right.sum()
-                # surplus_right_num = (labels_[~rect_right.bool()] == gtlabels_[~rect_right.bool()]).sum()
-                # original_right_num = (labels_ == gtlabels_).sum()
-                # original_wrong_num = (labels_ != gtlabels_).sum()
+            # labels_one_hot = F.one_hot(labels_.long(), num_classes=self.nclass)
+            # mask1 = (dot_ > dot_[labels_one_hot.bool()].unsqueeze(1).expand(-1, self.nclass)).long()
+            # rect_right = (F.one_hot(gtlabels_.long(), num_classes=self.nclass) * mask1).sum(dim=1)
+            # rect_right_num = rect_right.sum()
+            # surplus_right_num = (labels_[~rect_right.bool()] == gtlabels_[~rect_right.bool()]).sum()
+            # original_right_num = (labels_ == gtlabels_).sum()
+            # original_wrong_num = (labels_ != gtlabels_).sum()
 
             # if unlabeled and gtlabels is not None:
             #     mask_err = outs['mask']
@@ -445,16 +411,10 @@ class MocoContrastLoss(nn.Module):
             outs = self._contrastive(feats_, feats_t_, labels_, unlabeled)
         with torch.no_grad():
             if self.memory_bank is not None:
-                try:
-                    neglect_mask = outs['neglect_mask']
-                except:
-                    neglect_mask = torch.ones((feats_t_.shape[0],), device=device).bool()
                 if unlabeled:
-                    self.memory_bank.dequeue_enqueue(feats_t_[neglect_mask], labels_[neglect_mask],
-                                                     gtlabels_[neglect_mask], unlabeled)
+                    self.memory_bank.dequeue_enqueue(feats_t_, labels_, gtlabels_, unlabeled)
                 else:
-                    self.memory_bank.dequeue_enqueue(feats_t_[neglect_mask], labels_[neglect_mask],
-                                                     labels_[neglect_mask], unlabeled)
+                    self.memory_bank.dequeue_enqueue(feats_t_, labels_, labels_, unlabeled)
         return outs
 
 
