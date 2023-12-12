@@ -37,7 +37,7 @@ def get_parser():
     parser.add_argument(
         "--model_path",
         type=str,
-        default="./ckpt_best.pth",
+        default="./checkpoints/ckpt_best.pth",
         help="evaluation model path",
     )
     parser.add_argument(
