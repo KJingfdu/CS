@@ -41,7 +41,9 @@ from cs.utils.utils import (
 from eval import scale_crop_process
 
 parser = argparse.ArgumentParser(description="Semi-Supervised Semantic Segmentation")
-parser.add_argument("--config", type=str, default="experiments/pascal/1323/ours/config.yaml")
+parser.add_argument(
+    "--config", type=str, default="experiments/cityscapes/372_pyr/ours/config.yaml"
+)
 parser.add_argument("--local_rank", type=int, default=0)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--port", default=None, type=int)
@@ -101,8 +103,9 @@ def main():
     cfg_optim = cfg_trainer["optimizer"]
     times = 10 if "pascal" in cfg["dataset"]["type"] else 1
     total_iters = cfg_trainer["epochs"] * len(train_loader_sup)
-    if not cfg["trainer"]["contrastive"].get('method', 'u2pl') == 'u2pl':
-        contra_loss_fn = get_contra_loss(cfg, device='cuda')
+    if cfg["trainer"].get("contrastive", False):
+        if not cfg["trainer"]["contrastive"].get("method", "u2pl") == "u2pl":
+            contra_loss_fn = get_contra_loss(cfg, device="cuda")
 
     # times = 10
 
@@ -165,7 +168,28 @@ def main():
         cfg_trainer, len(train_loader_sup), optimizer_start, start_epoch=last_epoch
     )
 
-    if cfg["trainer"]["contrastive"].get('method', 'u2pl') == 'u2pl':
+    if cfg["trainer"].get("contrastive", False):
+        if cfg["trainer"]["contrastive"].get("method", "u2pl") == "u2pl":
+            # build class-wise memory bank
+            memobank = []
+            queue_ptrlis = []
+            queue_size = []
+            for i in range(cfg["net"]["num_classes"]):
+                memobank.append([torch.zeros(0, 256)])
+                queue_size.append(30000)
+                queue_ptrlis.append(torch.zeros(1, dtype=torch.long))
+            queue_size[0] = 50000
+
+            # build prototype
+            prototype = torch.zeros(
+                (
+                    cfg["net"]["num_classes"],
+                    cfg["trainer"]["contrastive"]["num_queries"],
+                    1,
+                    256,
+                )
+            ).cuda()
+    else:
         # build class-wise memory bank
         memobank = []
         queue_ptrlis = []
@@ -179,8 +203,8 @@ def main():
         # build prototype
         prototype = torch.zeros(
             (
-                cfg["net"]["num_classes"],
-                cfg["trainer"]["contrastive"]["num_queries"],
+                19,
+                2000,
                 1,
                 256,
             )
@@ -188,8 +212,40 @@ def main():
 
     # Start to train model
     for epoch in range(last_epoch, cfg_trainer["epochs"]):
-        if cfg["trainer"]["contrastive"].get('method', 'u2pl') == 'u2pl':
-            # Training
+        if cfg["trainer"].get("contrastive", False):
+            if cfg["trainer"]["contrastive"].get("method", "u2pl") == "u2pl":
+                # Training
+                train(
+                    model,
+                    model_teacher,
+                    optimizer,
+                    lr_scheduler,
+                    sup_loss_fn,
+                    train_loader_sup,
+                    train_loader_unsup,
+                    epoch,
+                    tb_logger,
+                    logger,
+                    memobank=memobank,
+                    queue_ptrlis=queue_ptrlis,
+                    queue_size=queue_size,
+                )
+            # 不使用U2PL
+            else:
+                train(
+                    model,
+                    model_teacher,
+                    optimizer,
+                    lr_scheduler,
+                    sup_loss_fn,
+                    train_loader_sup,
+                    train_loader_unsup,
+                    epoch,
+                    tb_logger,
+                    logger,
+                    contra_loss=contra_loss_fn,
+                )
+        else:
             train(
                 model,
                 model_teacher,
@@ -205,21 +261,6 @@ def main():
                 queue_ptrlis=queue_ptrlis,
                 queue_size=queue_size,
             )
-        # 不使用U2PL
-        else:
-            train(
-                model,
-                model_teacher,
-                optimizer,
-                lr_scheduler,
-                sup_loss_fn,
-                train_loader_sup,
-                train_loader_unsup,
-                epoch,
-                tb_logger,
-                logger,
-                contra_loss=contra_loss_fn,
-            )
 
         torch.cuda.empty_cache()
         torch.cuda.empty_cache()
@@ -229,13 +270,28 @@ def main():
             features = contra_loss_fn.memory_bank.seg_queue
             gts = contra_loss_fn.memory_bank.gt_queue
             islabels = contra_loss_fn.memory_bank.islabel_queue
-            torch.save(features, './' + cfg['saver']['snapshot_dir'] + '/' + 'features_{}'.format(epoch + 1))
-            torch.save(gts, './' + cfg['saver']['snapshot_dir'] + '/' + 'gt_{}'.format(epoch + 1))
-            torch.save(islabels, './' + cfg['saver']['snapshot_dir'] + '/' + 'islabels_{}'.format(epoch + 1))
+            torch.save(
+                features,
+                "./"
+                + cfg["saver"]["snapshot_dir"]
+                + "/"
+                + "features_{}".format(epoch + 1),
+            )
+            torch.save(
+                gts,
+                "./" + cfg["saver"]["snapshot_dir"] + "/" + "gt_{}".format(epoch + 1),
+            )
+            torch.save(
+                islabels,
+                "./"
+                + cfg["saver"]["snapshot_dir"]
+                + "/"
+                + "islabels_{}".format(epoch + 1),
+            )
         sampling_num = contra_loss_fn.eval_bank.all
         accuracy = contra_loss_fn.eval_bank.indicator()
-        tb_logger.add_scalar('sampling_num acc', sampling_num, epoch)
-        tb_logger.add_scalar('sampling acc', accuracy, epoch)
+        tb_logger.add_scalar("sampling_num acc", sampling_num, epoch)
+        tb_logger.add_scalar("sampling acc", accuracy, epoch)
         # Validation
         if cfg_trainer["eval_on"]:
             if rank == 0:
@@ -271,25 +327,26 @@ def main():
 
 
 def train(
-        model,
-        model_teacher,
-        optimizer,
-        lr_scheduler,
-        sup_loss_fn,
-        loader_l,
-        loader_u,
-        epoch,
-        tb_logger,
-        logger,
-        **kwargs
+    model,
+    model_teacher,
+    optimizer,
+    lr_scheduler,
+    sup_loss_fn,
+    loader_l,
+    loader_u,
+    epoch,
+    tb_logger,
+    logger,
+    **kwargs,
 ):
     global prototype, cfg
-    if cfg["trainer"]["contrastive"].get('method', 'u2pl') == 'u2pl':
-        memobank = kwargs['memobank']
-        queue_ptrlis = kwargs['queue_ptrlis']
-        queue_size = kwargs['queue_size']
-    else:
-        contra_loss_fn = kwargs['contra_loss']
+    if cfg["trainer"].get("contrastive", False):
+        if cfg["trainer"]["contrastive"].get("method", "u2pl") == "u2pl":
+            memobank = kwargs["memobank"]
+            queue_ptrlis = kwargs["queue_ptrlis"]
+            queue_size = kwargs["queue_size"]
+        else:
+            contra_loss_fn = kwargs["contra_loss"]
     ema_decay_origin = cfg["net"]["ema_decay"]
 
     # loader_l.sampler.set_epoch(epoch)
@@ -327,7 +384,9 @@ def train(
         image_l, label_l = image_l.cuda(), label_l.cuda()
 
         # image_u, _ = loader_u_iter.next()
-        image_u, label_u, mask_u = loader_u_iter.next()   # 用来eval separation-driven sampling的准确率
+        image_u, label_u, mask_u = (
+            loader_u_iter.next()
+        )  # 用来eval separation-driven sampling的准确率
         image_u = image_u.cuda()
         label_u = label_u.cuda()
         mask_u = mask_u.cuda()
@@ -357,14 +416,14 @@ def train(
                 # copy student parameters to teacher
                 with torch.no_grad():
                     for t_params, s_params in zip(
-                            model_teacher.parameters(), model.parameters()
+                        model_teacher.parameters(), model.parameters()
                     ):
                         t_params.data = s_params.data
 
             # generate pseudo labels first
             model_teacher.eval()
             outs = model_teacher(image_u)
-            pred_u_teacher, rep_u_teacher = outs["pred"], outs['rep']
+            pred_u_teacher, rep_u_teacher = outs["pred"], outs["rep"]
             pred_u_teacher = F.interpolate(
                 pred_u_teacher, (h, w), mode="bilinear", align_corners=True
             )
@@ -373,9 +432,16 @@ def train(
 
             # apply strong data augmentation: cutout, cutmix, or classmix
             if np.random.uniform(0, 1) < 1 and cfg["trainer"]["unsupervised"].get(
-                    "apply_aug", False
+                "apply_aug", False
             ):
-                image_u_aug, logits_u_aug, rep_u_t_aug, label_u_aug, mask_u_aug, label_u_gt = generate_unsup_data(
+                (
+                    image_u_aug,
+                    logits_u_aug,
+                    rep_u_t_aug,
+                    label_u_aug,
+                    mask_u_aug,
+                    label_u_gt,
+                ) = generate_unsup_data(
                     image_u,
                     logits_u_aug.clone(),
                     rep_u_teacher.clone(),
@@ -411,7 +477,7 @@ def train(
                 sup_loss = sup_loss_fn(pred_l_large, label_l.clone())
 
             # teacher forward
-            if cfg["trainer"]["unsupervised"].get('method', 'u2pl') == 'u2pl':
+            if cfg["trainer"]["unsupervised"].get("method", "u2pl") == "u2pl":
                 model_teacher.train()
                 with torch.no_grad():
                     out_t = model_teacher(image_all)
@@ -429,29 +495,28 @@ def train(
 
                 # unsupervised loss using entropy threshold in U2PL
                 drop_percent = cfg["trainer"]["unsupervised"].get("drop_percent", 100)
-                percent_unreliable = (100 - drop_percent) * (1 - epoch / cfg["trainer"]["epochs"])
-                drop_percent = 100 - percent_unreliable
-                unsup_loss = (
-                        compute_unsupervised_loss(
-                            pred_u_large,
-                            label_u_aug.clone(),
-                            drop_percent,
-                            pred_u_large_teacher.detach(),
-                            mask=mask_u_aug,
-                        )
-                        * cfg["trainer"]["unsupervised"].get("loss_weight", 1)
+                percent_unreliable = (100 - drop_percent) * (
+                    1 - epoch / cfg["trainer"]["epochs"]
                 )
+                drop_percent = 100 - percent_unreliable
+                unsup_loss = compute_unsupervised_loss(
+                    pred_u_large,
+                    label_u_aug.clone(),
+                    drop_percent,
+                    pred_u_large_teacher.detach(),
+                    mask=mask_u_aug,
+                ) * cfg["trainer"]["unsupervised"].get("loss_weight", 1)
 
             contra_flag = "none"
             if cfg["trainer"].get("contrastive", False):
                 # contrastive loss using unreliable pseudo labels
-                if cfg["trainer"]["contrastive"].get('method', 'u2pl') == 'u2pl':
+                if cfg["trainer"]["contrastive"].get("method", "u2pl") == "u2pl":
                     cfg_contra = cfg["trainer"]["contrastive"]
                     contra_flag = "{}:{}".format(
                         cfg_contra["low_rank"], cfg_contra["high_rank"]
                     )
                     alpha_t = cfg_contra["low_entropy_threshold"] * (
-                            1 - epoch / cfg["trainer"]["epochs"]
+                        1 - epoch / cfg["trainer"]["epochs"]
                     )
 
                     with torch.no_grad():
@@ -462,7 +527,7 @@ def train(
                             entropy[label_u_aug != 255].cpu().numpy().flatten(), alpha_t
                         )
                         low_entropy_mask = (
-                                entropy.le(low_thresh).float() * (label_u_aug != 255).bool()
+                            entropy.le(low_thresh).float() * (label_u_aug != 255).bool()
                         )
 
                         high_thresh = np.percentile(
@@ -470,7 +535,8 @@ def train(
                             100 - alpha_t,
                         )
                         high_entropy_mask = (
-                                entropy.ge(high_thresh).float() * (label_u_aug != 255).bool()
+                            entropy.ge(high_thresh).float()
+                            * (label_u_aug != 255).bool()
                         )
 
                         low_mask_all = torch.cat(
@@ -554,39 +620,45 @@ def train(
 
                     # dist.all_reduce(contra_loss)
                     contra_loss = (
-                            contra_loss
-                            / world_size
-                            * cfg["trainer"]["contrastive"].get("loss_weight", 1)
+                        contra_loss
+                        / world_size
+                        * cfg["trainer"]["contrastive"].get("loss_weight", 1)
                     )
                 else:
                     weight = cfg["trainer"]["contrastive"].get("loss_weight", 1)
                     _, predict_label = torch.max(pred_all, dim=1)
-                    contra_loss_outs = contra_loss_fn(torch.nn.functional.normalize(rep_all[:num_labeled], dim=1),
-                                                      torch.nn.functional.normalize(rep_all_teacher[:num_labeled], dim=1),
-                                                      torch.cat([label_l, label_u_aug])[:num_labeled],
-                                                      predict_label[:num_labeled],
-                                                      unlabeled=False)
-                    contra_loss = contra_loss_outs['loss'] * weight
+                    contra_loss_outs = contra_loss_fn(
+                        torch.nn.functional.normalize(rep_all[:num_labeled], dim=1),
+                        torch.nn.functional.normalize(
+                            rep_all_teacher[:num_labeled], dim=1
+                        ),
+                        torch.cat([label_l, label_u_aug])[:num_labeled],
+                        predict_label[:num_labeled],
+                        unlabeled=False,
+                    )
+                    contra_loss = contra_loss_outs["loss"] * weight
                     try:
-                        contra_loss1 = contra_loss_outs['loss1'] * weight
-                        contra_loss2 = contra_loss_outs['loss2'] * weight
+                        contra_loss1 = contra_loss_outs["loss1"] * weight
+                        contra_loss2 = contra_loss_outs["loss2"] * weight
                     except:
                         contra_loss1 = torch.Tensor(0)
                         contra_loss2 = torch.Tensor(0)
                     label_u_aug[mask_u_aug] = 255
-                    contra_loss_outs = contra_loss_fn(torch.nn.functional.normalize(rep_all[num_labeled:], dim=1),
-                                                      torch.nn.functional.normalize(rep_u_t_aug, dim=1),
-                                                      label_u_aug,
-                                                      predict_label[num_labeled:],
-                                                      unlabeled=True,
-                                                      gtlabels=label_u_gt)
+                    contra_loss_outs = contra_loss_fn(
+                        torch.nn.functional.normalize(rep_all[num_labeled:], dim=1),
+                        torch.nn.functional.normalize(rep_u_t_aug, dim=1),
+                        label_u_aug,
+                        predict_label[num_labeled:],
+                        unlabeled=True,
+                        gtlabels=label_u_gt,
+                    )
                     try:
-                        contra_loss1 += contra_loss_outs['loss1'] * weight
-                        contra_loss2 += contra_loss_outs['loss2'] * weight
+                        contra_loss1 += contra_loss_outs["loss1"] * weight
+                        contra_loss2 += contra_loss_outs["loss2"] * weight
                     except:
                         contra_loss1 = torch.Tensor(0)
                         contra_loss2 = torch.Tensor(0)
-                    contra_loss += contra_loss_outs['loss'] * weight
+                    contra_loss += contra_loss_outs["loss"] * weight
             else:
                 contra_loss = 0 * rep_all.sum()
 
@@ -603,17 +675,17 @@ def train(
                     1
                     - 1
                     / (
-                            i_iter
-                            - len(loader_l) * cfg["trainer"].get("sup_only_epoch", 1)
-                            + 1
+                        i_iter
+                        - len(loader_l) * cfg["trainer"].get("sup_only_epoch", 1)
+                        + 1
                     ),
                     ema_decay_origin,
                 )
                 for t_params, s_params in zip(
-                        model_teacher.parameters(), model.parameters()
+                    model_teacher.parameters(), model.parameters()
                 ):
                     t_params.data = (
-                            ema_decay * t_params.data + (1 - ema_decay) * s_params.data
+                        ema_decay * t_params.data + (1 - ema_decay) * s_params.data
                     )
 
         # gather all loss from different gpus
@@ -629,13 +701,13 @@ def train(
         # dist.all_reduce(reduced_con_loss)
         con_losses.update(reduced_con_loss.item())
 
-        reduced_con_loss_1 = contra_loss1.clone().detach()
-        # dist.all_reduce(reduced_con_loss)
-        con_losses_1.update(reduced_con_loss_1.item())
-
-        reduced_con_loss_2 = contra_loss2.clone().detach()
-        # dist.all_reduce(reduced_con_loss)
-        con_losses_2.update(reduced_con_loss_2.item())
+        # reduced_con_loss_1 = contra_loss1.clone().detach()
+        # # dist.all_reduce(reduced_con_loss)
+        # con_losses_1.update(reduced_con_loss_1.item())
+        #
+        # reduced_con_loss_2 = contra_loss2.clone().detach()
+        # # dist.all_reduce(reduced_con_loss)
+        # con_losses_2.update(reduced_con_loss_2.item())
 
         batch_end = time.time()
         batch_times.update(batch_end - batch_start)
@@ -671,13 +743,7 @@ def train(
             tb_logger.add_scalar("Con Loss2", con_losses_2.avg, i_iter)
 
 
-def validate(
-        model,
-        data_loader,
-        epoch,
-        logger,
-        evalmodule=None
-):
+def validate(model, data_loader, epoch, logger, evalmodule=None):
     model.eval()
     # data_loader.sampler.set_epoch(epoch)
 
@@ -752,9 +818,7 @@ def crop_forward(img, model):
         img, size=(new_h, new_w), mode="bilinear", align_corners=True
     )
     prediction = torch.zeros((classes, h, w), dtype=torch.float).cuda()
-    prediction += scale_crop_process(
-        model, image_scale, classes, 769, 769, h, w
-    )
+    prediction += scale_crop_process(model, image_scale, classes, 769, 769, h, w)
     return prediction
 
 
