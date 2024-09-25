@@ -32,7 +32,7 @@ class ModelBuilder(nn.Module):
     def _build_decoder(self, dec_cfg):
         dec_cfg["kwargs"].update(
             {
-                "in_planes": self.encoder.get_outplanes(),
+                "in_planes": 512,
                 "sync_bn": self._sync_bn,
                 "num_classes": self._num_classes,
             }

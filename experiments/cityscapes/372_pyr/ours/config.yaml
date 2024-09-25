@@ -78,7 +78,7 @@ net: # Required.
   sync_bn: False
   ema_decay: 0.995
   aux_loss:
-    aux_plane: 1024
+    aux_plane: 320
     loss_weight: 0.4
   encoder:
     type: cs.models.pyramidvit.pvt_medium
@@ -88,7 +88,7 @@ net: # Required.
       fpn: True
       replace_stride_with_dilation: [False, True, True]  #layer0...1 is fixed, layer2...4
   decoder:
-    type: cs.models.decoder.dec_deeplabv3_plus
+    type: cs.models.decoder.dec_deeplabv3_plus_pyr
     kwargs:
       inner_planes: 256
       dilations: [12, 24, 36]
