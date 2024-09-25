@@ -31,6 +31,7 @@ class MocoContrastLoss(nn.Module):
         if eval_feat:
             self.eval_bank = EvalFeat()
             self.eval_bank_2 = EvalFeat()
+        self.hard_samples = HardSamplesEvalModule()
 
     # 这个random采样还是在各个类别上随机选取点采样的,还不是最普通的random
     def _random_sampling(self, X, X_t, y_hat, y, unlabeled=True, gt_y=None):
@@ -109,6 +110,8 @@ class MocoContrastLoss(nn.Module):
                 if gt_y is not None and unlabeled:
                     this_y = gt_y[ii]
                     Y_ = torch.cat((Y_, this_y[edge_mask[id]][random_id]))
+                    hard_samples_rightnum = (this_y_s[edge_mask[id]][random_id] == this_y[edge_mask[id]][random_id]).sum()
+                    self.hard_samples.add(hard_samples_rightnum, num_keep)
 
                 num_all = interior_mask[id].int().sum()
                 if num_all <= 0:
@@ -199,6 +202,8 @@ class MocoContrastLoss(nn.Module):
                 Y = torch.ones(n_view).cuda() * cls_id
                 y_ = torch.cat((y_, Y))
         if gt_y is not None and unlabeled:
+            hard_right_num = (gt_y[ii, hard_indices].squeeze(1) == cls_id).sum()
+            self.hard_samples.add(hard_right_num, num_hard_keep)
             return X_, X_t_, y_, Y_
         return X_, X_t_, y_
 
@@ -595,6 +600,19 @@ class EvalFeat:
         self.right = 0
         return accuracy
 
+
+class HardSamplesEvalModule:
+    def __init__(self):
+        self.hard_num = 0
+        self.hard_right_num = 0
+
+    def add(self, hard_right_num, hard_num):
+        self.hard_num += hard_num
+        self.hard_right_num += hard_right_num
+
+    def clear(self):
+        self.hard_num = 0
+        self.hard_right_num = 0
 
 def edge_interior(label_mask: torch.Tensor, ignore_mask: torch.Tensor, min_k=3, max_k=5, pow=3, edge=5):
     device = label_mask.device

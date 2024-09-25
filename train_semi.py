@@ -292,6 +292,11 @@ def main():
         accuracy = contra_loss_fn.eval_bank.indicator()
         tb_logger.add_scalar("sampling_num acc", sampling_num, epoch)
         tb_logger.add_scalar("sampling acc", accuracy, epoch)
+        hard_num = contra_loss_fn.hard_samples.hard_num
+        hard_right_num = contra_loss_fn.hard_samples.hard_right_num
+        contra_loss_fn.hard_samples.clear()
+        tb_logger.add_scalar("hard_num", hard_num, epoch)
+        tb_logger.add_scalar("hard_right_num", hard_right_num, epoch)
         # Validation
         if cfg_trainer["eval_on"]:
             if rank == 0:
