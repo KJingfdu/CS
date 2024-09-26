@@ -229,7 +229,7 @@ class fpn(nn.Module):
         self.smooth2 = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
         self.smooth3 = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
         # Lateral layers
-        self.latlayer1 = nn.Conv2d(256, 256, kernel_size=1, stride=1, padding=0)
+        self.latlayer1 = nn.Conv2d(320, 256, kernel_size=1, stride=1, padding=0)
         self.latlayer2 = nn.Conv2d(128, 256, kernel_size=1, stride=1, padding=0)
         self.latlayer3 = nn.Conv2d(64, 256, kernel_size=1, stride=1, padding=0)
         # Semantic branch
@@ -277,6 +277,7 @@ class fpn(nn.Module):
         return F.interpolate(x, size=(h, w), mode="bilinear", align_corners=True)
 
     def forward(self, x):
+        res = {}
         c2, c3, c4, c5 = x
         p5 = self.toplayer(c5)
         p4 = self._upsample_add(p5, self.latlayer1(c4))
@@ -306,9 +307,8 @@ class fpn(nn.Module):
         s3 = self._upsample(F.relu(self.gn1(self.semantic_branch(p3))), h, w)
 
         s2 = F.relu(self.gn1(self.semantic_branch(p2)))
-        res = {"pred": self._upsample(self.conv3(s2 + s3 + s4 + s5), 4 * h, 4 * w)}
-
-        return
+        res["pred"] = self._upsample(self.conv3(s2 + s3 + s4 + s5), 4 * h, 4 * w)
+        return res
 
 
 class Aux_Module(nn.Module):
