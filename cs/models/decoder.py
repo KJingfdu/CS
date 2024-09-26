@@ -206,6 +206,111 @@ class dec_deeplabv3_plus_pyr(nn.Module):
         return res
 
 
+class fpn(nn.Module):
+    def __init__(
+        self,
+        in_planes,
+        num_classes=19,
+        inner_planes=256,
+        sync_bn=False,
+        dilations=(12, 24, 36),
+        rep_head=True,
+    ):
+        super(fpn, self).__init__()
+        self.num_classes = num_classes
+        norm_layer = get_syncbn() if sync_bn else nn.BatchNorm2d
+        self.rep_head = rep_head
+        # Top layer
+        self.toplayer = nn.Conv2d(
+            512, 256, kernel_size=1, stride=1, padding=0
+        )  # Reduce channels
+        # Smooth layers
+        self.smooth1 = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
+        self.smooth2 = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
+        self.smooth3 = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
+        # Lateral layers
+        self.latlayer1 = nn.Conv2d(256, 256, kernel_size=1, stride=1, padding=0)
+        self.latlayer2 = nn.Conv2d(128, 256, kernel_size=1, stride=1, padding=0)
+        self.latlayer3 = nn.Conv2d(64, 256, kernel_size=1, stride=1, padding=0)
+        # Semantic branch
+        self.semantic_branch = nn.Conv2d(256, 128, kernel_size=3, stride=1, padding=1)
+        self.conv2 = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
+        self.conv3 = nn.Conv2d(
+            128, self.num_classes, kernel_size=1, stride=1, padding=0
+        )
+        # num_groups, num_channels
+        self.gn1 = nn.GroupNorm(128, 128)
+        self.gn2 = nn.GroupNorm(256, 256)
+        if self.rep_head:
+            self.representation = nn.Sequential(
+                nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1, bias=True),
+                norm_layer(256),
+                nn.ReLU(inplace=True),
+                nn.Dropout2d(0.1),
+                nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1, bias=True),
+                norm_layer(256),
+                nn.ReLU(inplace=True),
+                nn.Dropout2d(0.1),
+                nn.Conv2d(256, 256, kernel_size=1, stride=1, padding=0, bias=True),
+            )
+
+    def _upsample_add(self, x, y):
+        """Upsample and add two feature maps.
+        Args:
+          x: (Variable) top feature map to be upsampled.
+          y: (Variable) lateral feature map.
+        Returns:
+          (Variable) added feature map.
+        Note in PyTorch, when input size is odd, the upsampled feature map
+        with `F.upsample(..., scale_factor=2, mode='nearest')`
+        maybe not equal to the lateral feature map size.
+        e.g.
+        original input size: [N,_,15,15] ->
+        conv2d feature map size: [N,_,8,8] ->
+        upsampled feature map size: [N,_,16,16]
+        So we choose bilinear upsample which supports arbitrary output sizes.
+        """
+        _, _, H, W = y.size()
+        return F.interpolate(x, size=(H, W), mode="bilinear", align_corners=True) + y
+
+    def _upsample(self, x, h, w):
+        return F.interpolate(x, size=(h, w), mode="bilinear", align_corners=True)
+
+    def forward(self, x):
+        c2, c3, c4, c5 = x
+        p5 = self.toplayer(c5)
+        p4 = self._upsample_add(p5, self.latlayer1(c4))
+        p3 = self._upsample_add(p4, self.latlayer2(c3))
+        p2 = self._upsample_add(p3, self.latlayer3(c2))
+        # Smooth
+        if self.rep_head:
+            res["rep"] = self.representation(p2)
+        p4 = self.smooth1(p4)
+        p3 = self.smooth2(p3)
+        p2 = self.smooth3(p2)
+        # Semantic
+        _, _, h, w = p2.size()
+        # 256->256
+        s5 = self._upsample(F.relu(self.gn2(self.conv2(p5))), h, w)
+        # 256->256
+        s5 = self._upsample(F.relu(self.gn2(self.conv2(s5))), h, w)
+        # 256->128
+        s5 = self._upsample(F.relu(self.gn1(self.semantic_branch(s5))), h, w)
+
+        # 256->256
+        s4 = self._upsample(F.relu(self.gn2(self.conv2(p4))), h, w)
+        # 256->128
+        s4 = self._upsample(F.relu(self.gn1(self.semantic_branch(s4))), h, w)
+
+        # 256->128
+        s3 = self._upsample(F.relu(self.gn1(self.semantic_branch(p3))), h, w)
+
+        s2 = F.relu(self.gn1(self.semantic_branch(p2)))
+        res = {"pred": self._upsample(self.conv3(s2 + s3 + s4 + s5), 4 * h, 4 * w)}
+
+        return
+
+
 class Aux_Module(nn.Module):
     def __init__(self, in_planes, num_classes=19, sync_bn=False):
         super(Aux_Module, self).__init__()
