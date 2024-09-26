@@ -85,11 +85,16 @@ def build_cityloader(split, all_cfg, seed=0):
     cfg.update(cfg.get(split, {}))
 
     workers = cfg.get("workers", 2)
-    batch_size = 1
+    if cfg_trainer.get("unsupervised", False) or split == 'val':
+        batch_size = 1
+        # build transform
+        trs_form = build_transfrom(cfg, train=False)
+    else:
+        # build transform
+        trs_form = build_transfrom(cfg)
+        batch_size = cfg_dset['batch_size']
     n_sup = cfg.get("n_sup", 2975)
 
-    # build transform
-    trs_form = build_transfrom(cfg, train=False)
     dset = city_dset(cfg["data_root"], cfg["data_list"], trs_form, seed, n_sup, split)
 
     # build sampler

@@ -31,12 +31,10 @@ from cs.utils.utils import (
 )
 
 parser = argparse.ArgumentParser(description="Semi-Supervised Semantic Segmentation")
-parser.add_argument("--config", type=str, default="config.yaml")
+parser.add_argument("--config", type=str, default="experiments/cityscapes/372_pyr/suponly/config.yaml")
 parser.add_argument("--local_rank", type=int, default=0)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--port", default=None, type=int)
-logger = init_log("global", logging.INFO)
-logger.propagate = 0
 
 
 def main():
@@ -45,13 +43,16 @@ def main():
     seed = args.seed
     cfg = yaml.load(open(args.config, "r"), Loader=yaml.Loader)
 
+    logger = init_log("global", logging.INFO)
+    logger.propagate = 0
+
     cfg["exp_path"] = os.path.dirname(args.config)
     cfg["save_path"] = os.path.join(cfg["exp_path"], cfg["saver"]["snapshot_dir"])
 
     cudnn.enabled = True
     cudnn.benchmark = True
 
-    rank, word_size = setup_distributed(port=args.port)
+    rank, word_size = 0, 1
 
     if rank == 0:
         logger.info("{}".format(pprint.pformat(cfg)))
@@ -82,13 +83,13 @@ def main():
 
     model.cuda()
 
-    local_rank = int(os.environ["LOCAL_RANK"])
-    model = torch.nn.parallel.DistributedDataParallel(
-        model,
-        device_ids=[local_rank],
-        output_device=local_rank,
-        find_unused_parameters=False,
-    )
+    # local_rank = int(os.environ["LOCAL_RANK"])
+    # model = torch.nn.parallel.DistributedDataParallel(
+    #     model,
+    #     device_ids=[local_rank],
+    #     output_device=local_rank,
+    #     find_unused_parameters=False,
+    # )
 
     criterion = get_criterion(cfg)
 
@@ -144,10 +145,11 @@ def main():
             train_loader_sup,
             epoch,
             tb_logger,
+            logger,
         )
 
         # Validation and store checkpoint
-        prec = validate(model, val_loader, epoch)
+        prec = validate(model, val_loader, epoch, logger)
 
         if rank == 0:
             state = {
@@ -182,13 +184,14 @@ def train(
     data_loader,
     epoch,
     tb_logger,
+    logger,
 ):
     model.train()
 
-    data_loader.sampler.set_epoch(epoch)
+    # data_loader.sampler.set_epoch(epoch)
     data_loader_iter = iter(data_loader)
 
-    rank, world_size = dist.get_rank(), dist.get_world_size()
+    rank, world_size = 0, 1
 
     losses = AverageMeter(10)
     data_times = AverageMeter(10)
@@ -205,7 +208,7 @@ def train(
         learning_rates.update(lr[0])
         lr_scheduler.step()
 
-        image, label = data_loader_iter.next()
+        image, label, _ = data_loader_iter.next()
         batch_size, h, w = label.size()
         image, label = image.cuda(), label.cuda()
         outs = model(image)
@@ -225,7 +228,7 @@ def train(
 
         # gather all loss from different gpus
         reduced_loss = loss.clone().detach()
-        dist.all_reduce(reduced_loss)
+        # dist.all_reduce(reduced_loss)
         losses.update(reduced_loss.item())
 
         batch_end = time.time()
@@ -255,21 +258,22 @@ def validate(
     model,
     data_loader,
     epoch,
+    logger,
 ):
     model.eval()
-    data_loader.sampler.set_epoch(epoch)
+    # data_loader.sampler.set_epoch(epoch)
 
     num_classes, ignore_label = (
         cfg["net"]["num_classes"],
         cfg["dataset"]["ignore_label"],
     )
-    rank, world_size = dist.get_rank(), dist.get_world_size()
+    rank, world_size = 0, 1
 
     intersection_meter = AverageMeter()
     union_meter = AverageMeter()
 
     for step, batch in enumerate(data_loader):
-        images, labels = batch
+        images, labels, _ = batch
         images = images.cuda()
         labels = labels.long().cuda()
         batch_size, h, w = labels.shape
@@ -293,9 +297,9 @@ def validate(
         reduced_union = torch.from_numpy(union).cuda()
         reduced_target = torch.from_numpy(target).cuda()
 
-        dist.all_reduce(reduced_intersection)
-        dist.all_reduce(reduced_union)
-        dist.all_reduce(reduced_target)
+        # dist.all_reduce(reduced_intersection)
+        # dist.all_reduce(reduced_union)
+        # dist.all_reduce(reduced_target)
 
         intersection_meter.update(reduced_intersection.cpu().numpy())
         union_meter.update(reduced_union.cpu().numpy())
