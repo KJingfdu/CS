@@ -16,3 +16,11 @@ plot_*.py
 new.py
 test*
 rect*
+3.txt
+data/
+checkpoints/
+71.14/
+72.58_75.68/
+73.24_77.50/
+1_4/
+1_8/

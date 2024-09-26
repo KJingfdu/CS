@@ -103,6 +103,7 @@ def main():
     cfg_optim = cfg_trainer["optimizer"]
     times = 10 if "pascal" in cfg["dataset"]["type"] else 1
     total_iters = cfg_trainer["epochs"] * len(train_loader_sup)
+    contra_loss_fn = None
     if cfg["trainer"].get("contrastive", False):
         if not cfg["trainer"]["contrastive"].get("method", "u2pl") == "u2pl":
             contra_loss_fn = get_contra_loss(cfg, device="cuda")
@@ -265,38 +266,39 @@ def main():
         torch.cuda.empty_cache()
         torch.cuda.empty_cache()
         torch.cuda.empty_cache()
-        list1 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 50, 75, 100, 150, 200]
-        if epoch + 1 in list1:
-            features = contra_loss_fn.memory_bank.seg_queue
-            gts = contra_loss_fn.memory_bank.gt_queue
-            islabels = contra_loss_fn.memory_bank.islabel_queue
-            torch.save(
-                features,
-                "./"
-                + cfg["saver"]["snapshot_dir"]
-                + "/"
-                + "features_{}".format(epoch + 1),
-            )
-            torch.save(
-                gts,
-                "./" + cfg["saver"]["snapshot_dir"] + "/" + "gt_{}".format(epoch + 1),
-            )
-            torch.save(
-                islabels,
-                "./"
-                + cfg["saver"]["snapshot_dir"]
-                + "/"
-                + "islabels_{}".format(epoch + 1),
-            )
-        sampling_num = contra_loss_fn.eval_bank.all
-        accuracy = contra_loss_fn.eval_bank.indicator()
-        tb_logger.add_scalar("sampling_num acc", sampling_num, epoch)
-        tb_logger.add_scalar("sampling acc", accuracy, epoch)
-        hard_num = contra_loss_fn.hard_samples.hard_num
-        hard_right_num = contra_loss_fn.hard_samples.hard_right_num
-        contra_loss_fn.hard_samples.clear()
-        tb_logger.add_scalar("hard_num", hard_num, epoch)
-        tb_logger.add_scalar("hard_right_num", hard_right_num, epoch)
+        if contra_loss_fn is not None:
+            list1 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 50, 75, 100, 150, 200]
+            if epoch + 1 in list1:
+                features = contra_loss_fn.memory_bank.seg_queue
+                gts = contra_loss_fn.memory_bank.gt_queue
+                islabels = contra_loss_fn.memory_bank.islabel_queue
+                torch.save(
+                    features,
+                    "./"
+                    + cfg["saver"]["snapshot_dir"]
+                    + "/"
+                    + "features_{}".format(epoch + 1),
+                )
+                torch.save(
+                    gts,
+                    "./" + cfg["saver"]["snapshot_dir"] + "/" + "gt_{}".format(epoch + 1),
+                )
+                torch.save(
+                    islabels,
+                    "./"
+                    + cfg["saver"]["snapshot_dir"]
+                    + "/"
+                    + "islabels_{}".format(epoch + 1),
+                )
+            sampling_num = contra_loss_fn.eval_bank.all
+            accuracy = contra_loss_fn.eval_bank.indicator()
+            tb_logger.add_scalar("sampling_num acc", sampling_num, epoch)
+            tb_logger.add_scalar("sampling acc", accuracy, epoch)
+            hard_num = contra_loss_fn.hard_samples.hard_num
+            hard_right_num = contra_loss_fn.hard_samples.hard_right_num
+            contra_loss_fn.hard_samples.clear()
+            tb_logger.add_scalar("hard_num", hard_num, epoch)
+            tb_logger.add_scalar("hard_right_num", hard_right_num, epoch)
         # Validation
         if cfg_trainer["eval_on"]:
             if rank == 0:

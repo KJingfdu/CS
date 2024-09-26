@@ -1,3 +1,5 @@
+import os.path
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -233,12 +235,14 @@ class PyramidVisionTransformer(nn.Module):
         sr_ratios=[8, 4, 2, 1],
         num_stages=4,
         F4=False,
+        out_planes=512,
     ):
         super().__init__()
         self.num_classes = num_classes
         self.depths = depths
         self.F4 = F4
         self.num_stages = num_stages
+        self.out_planes = out_planes
 
         dpr = [
             x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))
@@ -303,6 +307,9 @@ class PyramidVisionTransformer(nn.Module):
         elif isinstance(m, nn.LayerNorm):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
+
+    def get_outplanes(self):
+        return self.out_planes
 
     def _get_pos_embed(self, pos_embed, patch_embed, H, W):
         if H * W == self.patch_embed1.num_patches:
@@ -382,9 +389,13 @@ class PVT_medium(PyramidVisionTransformer):
             sr_ratios=[8, 4, 2, 1],
             drop_rate=0.0,
             drop_path_rate=0.1,
+            out_planes=512,
         )
 
 
 def pvt_medium(**kwargs):
     model = PVT_medium()
+    if os.path.exists('./pretrained/pvt_medium.pth'):
+        state_dict = torch.load('./pretrained/pvt_medium.pth')
+        model.load_state_dict(state_dict, strict=False)
     return model
