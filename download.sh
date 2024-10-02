@@ -2,8 +2,8 @@
 
 # Define the file URLs and MD5 checksums
 files=(
-    "http://example.com/ILSVRC2012_img_train.tar.gz"
-    "http://example.com/ILSVRC2012_img_val.tar.gz"
+    "https://image-net.org/data/ILSVRC/2012/ILSVRC2012_img_train.tar"
+    "https://image-net.org/data/ILSVRC/2012/ILSVRC2012_img_val.tar"
     # Add more files as necessary
 )
 
