@@ -19,17 +19,17 @@ class DropPath(nn.Module):
         return drop_path(x, self.drop_prob, self.training, self.scale_by_keep)
 
     def extra_repr(self):
-        return f"drop_prob={round(self.drop_prob,3):0.3f}"
+        return f"drop_prob={round(self.drop_prob, 3):0.3f}"
 
 
 class Mlp(nn.Module):
     def __init__(
-        self,
-        in_features,
-        hidden_features=None,
-        out_features=None,
-        act_layer=nn.GELU,
-        drop=0.0,
+            self,
+            in_features,
+            hidden_features=None,
+            out_features=None,
+            act_layer=nn.GELU,
+            drop=0.0,
     ):
         super().__init__()
         out_features = out_features or in_features
@@ -50,24 +50,24 @@ class Mlp(nn.Module):
 
 class Attention(nn.Module):
     def __init__(
-        self,
-        dim,
-        num_heads=8,
-        qkv_bias=False,
-        qk_scale=None,
-        attn_drop=0.0,
-        proj_drop=0.0,
-        sr_ratio=1,
+            self,
+            dim,
+            num_heads=8,
+            qkv_bias=False,
+            qk_scale=None,
+            attn_drop=0.0,
+            proj_drop=0.0,
+            sr_ratio=1,
     ):
         super().__init__()
         assert (
-            dim % num_heads == 0
+                dim % num_heads == 0
         ), f"dim {dim} should be divided by num_heads {num_heads}."
 
         self.dim = dim
         self.num_heads = num_heads
         head_dim = dim // num_heads
-        self.scale = qk_scale or head_dim**-0.5
+        self.scale = qk_scale or head_dim ** -0.5
 
         self.q = nn.Linear(dim, dim, bias=qkv_bias)
         self.kv = nn.Linear(dim, dim * 2, bias=qkv_bias)
@@ -119,18 +119,18 @@ class Attention(nn.Module):
 class Block(nn.Module):
 
     def __init__(
-        self,
-        dim,
-        num_heads,
-        mlp_ratio=4.0,
-        qkv_bias=False,
-        qk_scale=None,
-        drop=0.0,
-        attn_drop=0.0,
-        drop_path=0.0,
-        act_layer=nn.GELU,
-        norm_layer=nn.LayerNorm,
-        sr_ratio=1,
+            self,
+            dim,
+            num_heads,
+            mlp_ratio=4.0,
+            qkv_bias=False,
+            qk_scale=None,
+            drop=0.0,
+            attn_drop=0.0,
+            drop_path=0.0,
+            act_layer=nn.GELU,
+            norm_layer=nn.LayerNorm,
+            sr_ratio=1,
     ):
         super().__init__()
         self.norm1 = norm_layer(dim)
@@ -165,7 +165,7 @@ class PatchEmbed(nn.Module):
     """Image to Patch Embedding"""
 
     def __init__(
-        self, img_size=224, patch_size=16, in_chans=3, embed_dim=768, stride=None
+            self, img_size=224, patch_size=16, in_chans=3, embed_dim=768, stride=None
     ):
         super().__init__()
         img_size = to_2tuple(img_size)
@@ -173,20 +173,30 @@ class PatchEmbed(nn.Module):
 
         self.img_size = img_size
         self.patch_size = patch_size
+        self.stride = stride
         assert (
-            img_size[0] % patch_size[0] == 0 and img_size[1] % patch_size[1] == 0
+                img_size[0] % patch_size[0] == 0 and img_size[1] % patch_size[1] == 0
         ), f"img_size {img_size} should be divided by patch_size {patch_size}."
         if stride is None:
             self.H, self.W = img_size[0] // patch_size[0], img_size[1] // patch_size[1]
         else:
             self.H, self.W = img_size[0], img_size[1]
         self.num_patches = self.H * self.W
-        self.proj = nn.Conv2d(
-            in_chans,
-            embed_dim,
-            kernel_size=patch_size,
-            stride=patch_size if stride is None else stride,
-        )
+        if stride is None:
+            self.proj = nn.Conv2d(
+                in_chans,
+                embed_dim,
+                kernel_size=patch_size,
+                stride=patch_size if stride is None else stride,
+            )
+        else:
+            self.proj = nn.Conv2d(
+                in_chans,
+                embed_dim,
+                kernel_size=(3, 3),
+                stride=stride,
+                padding=(1, 1),
+            )
         self.norm = nn.LayerNorm(embed_dim)
 
     def forward(self, x):
@@ -194,13 +204,13 @@ class PatchEmbed(nn.Module):
 
         x = self.proj(x).flatten(2).transpose(1, 2)
         x = self.norm(x)
-        H, W = H // self.patch_size[0], W // self.patch_size[1]
+        H, W = (H // self.patch_size[0], W // self.patch_size[1]) if self.stride is None else (H, W)
 
         return x, (H, W)
 
 
 def drop_path(
-    x, drop_prob: float = 0.0, training: bool = False, scale_by_keep: bool = True
+        x, drop_prob: float = 0.0, training: bool = False, scale_by_keep: bool = True
 ):
     """Drop paths (Stochastic Depth) per sample (when applied in main path of residual blocks).
 
@@ -215,7 +225,7 @@ def drop_path(
         return x
     keep_prob = 1 - drop_prob
     shape = (x.shape[0],) + (1,) * (
-        x.ndim - 1
+            x.ndim - 1
     )  # work with diff dim tensors, not just 2D ConvNets
     random_tensor = x.new_empty(shape).bernoulli_(keep_prob)
     if keep_prob > 0.0 and scale_by_keep:
@@ -225,26 +235,26 @@ def drop_path(
 
 class PyramidVisionTransformer(nn.Module):
     def __init__(
-        self,
-        img_size=224,
-        patch_size=16,
-        in_chans=3,
-        num_classes=1000,
-        embed_dims=[64, 128, 256, 512],
-        num_heads=[1, 2, 4, 8],
-        mlp_ratios=[4, 4, 4, 4],
-        qkv_bias=False,
-        qk_scale=None,
-        drop_rate=0.0,
-        attn_drop_rate=0.0,
-        drop_path_rate=0.0,
-        norm_layer=nn.LayerNorm,
-        depths=[3, 4, 6, 3],
-        sr_ratios=[8, 4, 2, 1],
-        num_stages=4,
-        F4=False,
-        out_planes=512,
-        strides=[None, None, None, None],
+            self,
+            img_size=224,
+            patch_size=16,
+            in_chans=3,
+            num_classes=1000,
+            embed_dims=[64, 128, 256, 512],
+            num_heads=[1, 2, 4, 8],
+            mlp_ratios=[4, 4, 4, 4],
+            qkv_bias=False,
+            qk_scale=None,
+            drop_rate=0.0,
+            attn_drop_rate=0.0,
+            drop_path_rate=0.0,
+            norm_layer=nn.LayerNorm,
+            depths=[3, 4, 6, 3],
+            sr_ratios=[8, 4, 2, 1],
+            num_stages=4,
+            F4=False,
+            out_planes=512,
+            strides=[None, None, None, None],
     ):
         super().__init__()
         self.num_classes = num_classes

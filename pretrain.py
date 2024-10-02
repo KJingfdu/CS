@@ -60,13 +60,13 @@ def main():
 
     # 加载ImageNet数据集
     train_dataset = datasets.ImageNet(
-        root="F:/datasets/imagenet/train", split="train", transform=transform
+        root="./data/imagenet", split="train", transform=transform
     )
     train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=4)
 
     # 加载验证集
     val_dataset = datasets.ImageNet(
-        root="F:/datasets/imagenet/val", split="val", transform=transform
+        root="./data/imagenet", split="val", transform=transform
     )
     val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=4)
 
