@@ -164,7 +164,9 @@ class Block(nn.Module):
 class PatchEmbed(nn.Module):
     """Image to Patch Embedding"""
 
-    def __init__(self, img_size=224, patch_size=16, in_chans=3, embed_dim=768):
+    def __init__(
+        self, img_size=224, patch_size=16, in_chans=3, embed_dim=768, stride=None
+    ):
         super().__init__()
         img_size = to_2tuple(img_size)
         patch_size = to_2tuple(patch_size)
@@ -174,10 +176,16 @@ class PatchEmbed(nn.Module):
         assert (
             img_size[0] % patch_size[0] == 0 and img_size[1] % patch_size[1] == 0
         ), f"img_size {img_size} should be divided by patch_size {patch_size}."
-        self.H, self.W = img_size[0] // patch_size[0], img_size[1] // patch_size[1]
+        if stride is None:
+            self.H, self.W = img_size[0] // patch_size[0], img_size[1] // patch_size[1]
+        else:
+            self.H, self.W = img_size[0], img_size[1]
         self.num_patches = self.H * self.W
         self.proj = nn.Conv2d(
-            in_chans, embed_dim, kernel_size=patch_size, stride=patch_size
+            in_chans,
+            embed_dim,
+            kernel_size=patch_size,
+            stride=patch_size if stride is None else stride,
         )
         self.norm = nn.LayerNorm(embed_dim)
 
@@ -236,6 +244,7 @@ class PyramidVisionTransformer(nn.Module):
         num_stages=4,
         F4=False,
         out_planes=512,
+        strides=[None, None, None, None],
     ):
         super().__init__()
         self.num_classes = num_classes
@@ -255,6 +264,7 @@ class PyramidVisionTransformer(nn.Module):
                 patch_size=patch_size if i == 0 else 2,
                 in_chans=in_chans if i == 0 else embed_dims[i - 1],
                 embed_dim=embed_dims[i],
+                stride=strides[i],
             )
             num_patches = (
                 patch_embed.num_patches
@@ -393,9 +403,35 @@ class PVT_medium(PyramidVisionTransformer):
         )
 
 
+class PVT_medium_semantic(PyramidVisionTransformer):
+    def __init__(self, **kwargs):
+        super(PVT_medium_semantic, self).__init__(
+            patch_size=4,
+            embed_dims=[64, 128, 320, 512],
+            num_heads=[1, 2, 5, 8],
+            mlp_ratios=[8, 8, 4, 4],
+            qkv_bias=True,
+            norm_layer=partial(nn.LayerNorm, eps=1e-6),
+            depths=[3, 4, 18, 3],
+            sr_ratios=[8, 4, 2, 1],
+            drop_rate=0.0,
+            drop_path_rate=0.1,
+            out_planes=512,
+            strides=[None, None, 1, 1],
+        )
+
+
 def pvt_medium(**kwargs):
     model = PVT_medium()
-    if os.path.exists('./pretrained/pvt_medium.pth'):
-        state_dict = torch.load('./pretrained/pvt_medium.pth')
+    if os.path.exists("./pretrained/pvt_medium.pth"):
+        state_dict = torch.load("./pretrained/pvt_medium.pth")
+        model.load_state_dict(state_dict, strict=False)
+    return model
+
+
+def pvt_medium_semantic(**kwargs):
+    model = PVT_medium_semantic()
+    if os.path.exists("./pretrained/pvt_medium_semantic.pth"):
+        state_dict = torch.load("./pretrained/pvt_medium_semantic.pth")
         model.load_state_dict(state_dict, strict=False)
     return model
