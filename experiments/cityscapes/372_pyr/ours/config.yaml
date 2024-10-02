@@ -88,7 +88,7 @@ net: # Required.
       fpn: True
       replace_stride_with_dilation: [False, True, True]  #layer0...1 is fixed, layer2...4
   decoder:
-    type: cs.models.decoder.dec_deeplabv3_plus_pyr
+    type: cs.models.decoder.pfpn
     kwargs:
       inner_planes: 256
       dilations: [12, 24, 36]
