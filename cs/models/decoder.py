@@ -388,7 +388,7 @@ class pfpn(nn.Module):
         # Semantic
         feats = []
         for i, layer in enumerate(self.layers):
-            f = layer(eval("p{}".format(i + 2)))
+            f = layer(eval("p{}".format(i + 2)), p2.shape[2:])
             feats.append(f)
         seg_feats = torch.sum(torch.stack(feats, dim=0), dim=0)
         res["pred"] = self.conv_logits(seg_feats)
@@ -407,13 +407,15 @@ class ConvUpsample(nn.Module):
                                            nn.ReLU()))
             in_channels = inner_channels
 
-    def forward(self, x):
+    def forward(self, x, shape=None):
         num_upsample = self.num_upsamples
         for i in range(self.num_layers):
             x = self.conv[i](x)
             if num_upsample > 0:
                 num_upsample -= 1
                 x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=False)
+        if shape is not None:
+            x = F.interpolate(x, size=shape, mode='bilinear', align_corners=False)
         return x
 
 

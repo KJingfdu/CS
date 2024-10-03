@@ -15,11 +15,12 @@ def train_model(model, train_loader, criterion, optimizer, scheduler, device):
     for inputs, labels in train_loader:
         inputs, labels = inputs.to(device), labels.to(device)
         optimizer.zero_grad()
-        outputs = model(inputs)
+        outputs = model.forward_label(inputs)
         loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
         running_loss += loss.item()
+        print('loss:{}'.format(loss))
 
     scheduler.step()  # 每个epoch更新学习率
     return running_loss / len(train_loader)
@@ -62,16 +63,16 @@ def main():
     train_dataset = datasets.ImageNet(
         root="./data/imagenet", split="train", transform=transform
     )
-    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=4)
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=4)
 
-    # 加载验证集
-    val_dataset = datasets.ImageNet(
-        root="./data/imagenet", split="val", transform=transform
-    )
-    val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=4)
+    # # 加载验证集
+    # val_dataset = datasets.ImageNet(
+    #     root="./data/imagenet", split="val", transform=transform
+    # )
+    # val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=4)
 
     # 初始化模型和迁移到设备
-    model = CustomCNN().to(device)
+    model = CustomCNN(pretrain=True).to(device)
 
     # 使用 Timm 创建优化器和调度器
     optimizer = create_optimizer_v2(model, opt="adamw", lr=0.001, weight_decay=0.02)
@@ -88,11 +89,13 @@ def main():
         train_loss = train_model(
             model, train_loader, criterion, optimizer, scheduler, device
         )
-        val_loss, val_accuracy = validate_model(model, val_loader, criterion, device)
-
         print(
-            f"Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss}, Validation Loss: {val_loss}, Validation Accuracy: {val_accuracy}"
+            f"Epoch {epoch + 1}/{num_epochs}, Train Loss: {train_loss}"
         )
+        # val_loss, val_accuracy = validate_model(model, val_loader, criterion, device)
+        # print(
+        #     f"Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss}, Validation Loss: {val_loss}, Validation Accuracy: {val_accuracy}"
+        # )
 
     # 保存模型
     torch.save(model.state_dict(), "pvt_medium_semantic.pth")

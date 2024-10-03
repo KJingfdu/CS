@@ -262,7 +262,7 @@ class PyramidVisionTransformer(nn.Module):
         self.F4 = F4
         self.num_stages = num_stages
         self.out_planes = out_planes
-
+        self.fc = None
         dpr = [
             x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))
         ]  # stochastic depth decay rule
@@ -379,6 +379,11 @@ class PyramidVisionTransformer(nn.Module):
 
         return x
 
+    def forward_label(self, x):
+        x = self.forward_features(x)[-1]
+        x = F.adaptive_avg_pool2d(x, (1, 1))
+        x = self.fc(x.squeeze())
+        return x
 
 class PVT_small(PyramidVisionTransformer):
     def __init__(self, **kwargs):
@@ -439,9 +444,11 @@ def pvt_medium(**kwargs):
     return model
 
 
-def pvt_medium_semantic(**kwargs):
+def pvt_medium_semantic(pretrain=False, **kwargs):
     model = PVT_medium_semantic()
     if os.path.exists("./pretrained/pvt_medium_semantic.pth"):
         state_dict = torch.load("./pretrained/pvt_medium_semantic.pth")
         model.load_state_dict(state_dict, strict=False)
+    if pretrain:
+        model.fc = nn.Sequential(nn.Linear(512, 2048), nn.BatchNorm1d(2048), nn.ReLU(), nn.Linear(2048, 1000))
     return model
