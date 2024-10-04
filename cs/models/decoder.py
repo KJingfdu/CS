@@ -415,35 +415,33 @@ class MLP(nn.Module):
         return x
 
 
-class SegFormerHead(nn.Module):
+class segformer_decoder_b2(nn.Module):
     """
     SegFormer: Simple and Efficient Design for Semantic Segmentation with Transformers
     """
 
     def __init__(
         self,
-        feature_strides,
-        in_channels,
-        channels,
-        *,
         num_classes,
+        feature_strides=[4,8,16,32],
+        in_channels=[64,128,320,512],
+        channels=128,
         dropout_ratio=0.1,
-        conv_cfg=None,
-        norm_cfg=None,
+        norm_cfg=dict(type='BN', requires_grad=True),
         act_cfg=dict(type="ReLU"),
-        in_index=-1,
+        in_index=[0, 1, 2, 3],
         input_transform="multiple_select",
-        decoder_params=None,
+        decoder_params=dict(embed_dim=768),
         ignore_index=255,
         align_corners=False,
+        **kwargs,
     ):
-        super(SegFormerHead, self).__init__()
+        super(segformer_decoder_b2, self).__init__()
         self.feature_strides = feature_strides
         self._init_inputs(in_channels, in_index, input_transform)
         self.channels = channels
         self.num_classes = num_classes
         self.dropout_ratio = dropout_ratio
-        self.conv_cfg = conv_cfg
         self.norm_cfg = norm_cfg
         self.act_cfg = act_cfg
         self.in_index = in_index
@@ -471,10 +469,21 @@ class SegFormerHead(nn.Module):
             in_channels=embedding_dim * 4,
             out_channels=embedding_dim,
             kernel_size=1,
-            norm_cfg=dict(type="SyncBN", requires_grad=True),
+            norm_cfg=dict(type="BN", requires_grad=True),
         )
 
         self.linear_pred = nn.Conv2d(embedding_dim, self.num_classes, kernel_size=1)
+        self.representation = nn.Sequential(
+                nn.Conv2d(3072, 768, kernel_size=3, stride=1, padding=1, bias=True),
+                nn.BatchNorm2d(768),
+                nn.ReLU(inplace=True),
+                nn.Dropout2d(0.1),
+                nn.Conv2d(768, 256, kernel_size=3, stride=1, padding=1, bias=True),
+                nn.BatchNorm2d(256),
+                nn.ReLU(inplace=True),
+                nn.Dropout2d(0.1),
+                nn.Conv2d(256, 256, kernel_size=1, stride=1, padding=0, bias=True),
+            )
 
     @staticmethod
     def resize(
@@ -519,6 +528,7 @@ class SegFormerHead(nn.Module):
         return F.interpolate(input, size, scale_factor, mode, align_corners)
 
     def forward(self, inputs):
+        outs = {}
         x = self._transform_inputs(inputs)  # len=4, 1/4,1/8,1/16,1/32
         c1, c2, c3, c4 = x
 
@@ -545,11 +555,12 @@ class SegFormerHead(nn.Module):
         )
 
         _c = self.linear_fuse(torch.cat([_c4, _c3, _c2, _c1], dim=1))
+        outs['rep'] = self.representation(torch.cat([_c4, _c3, _c2, _c1], dim=1))
 
         x = self.dropout(_c)
         x = self.linear_pred(x)
-
-        return x
+        outs['pred'] = x
+        return outs
 
     def _init_inputs(self, in_channels, in_index, input_transform):
         """Check and initialize input transforms.
@@ -588,39 +599,6 @@ class SegFormerHead(nn.Module):
             assert isinstance(in_channels, int)
             assert isinstance(in_index, int)
             self.in_channels = in_channels
-
-    def init_weights(self):
-        """Initialize weights of classification layer."""
-        normal_init(self.conv_seg, mean=0, std=0.01)
-
-    def _transform_inputs(self, inputs):
-        """Transform inputs for decoder.
-
-        Args:
-            inputs (list[Tensor]): List of multi-level img features.
-
-        Returns:
-            Tensor: The transformed inputs
-        """
-
-        if self.input_transform == "resize_concat":
-            inputs = [inputs[i] for i in self.in_index]
-            upsampled_inputs = [
-                resize(
-                    input=x,
-                    size=inputs[0].shape[2:],
-                    mode="bilinear",
-                    align_corners=self.align_corners,
-                )
-                for x in inputs
-            ]
-            inputs = torch.cat(upsampled_inputs, dim=1)
-        elif self.input_transform == "multiple_select":
-            inputs = [inputs[i] for i in self.in_index]
-        else:
-            inputs = inputs[self.in_index]
-
-        return inputs
 
 
 class ConvUpsample(nn.Module):

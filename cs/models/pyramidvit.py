@@ -385,6 +385,7 @@ class PyramidVisionTransformer(nn.Module):
         x = self.fc(x.squeeze())
         return x
 
+
 class PVT_small(PyramidVisionTransformer):
     def __init__(self, **kwargs):
         super(PVT_small, self).__init__(

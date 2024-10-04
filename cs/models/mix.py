@@ -15,12 +15,12 @@ import os
 
 class Mlp(nn.Module):
     def __init__(
-        self,
-        in_features,
-        hidden_features=None,
-        out_features=None,
-        act_layer=nn.GELU,
-        drop=0.0,
+            self,
+            in_features,
+            hidden_features=None,
+            out_features=None,
+            act_layer=nn.GELU,
+            drop=0.0,
     ):
         super().__init__()
         out_features = out_features or in_features
@@ -60,24 +60,24 @@ class Mlp(nn.Module):
 
 class Attention(nn.Module):
     def __init__(
-        self,
-        dim,
-        num_heads=8,
-        qkv_bias=False,
-        qk_scale=None,
-        attn_drop=0.0,
-        proj_drop=0.0,
-        sr_ratio=1,
+            self,
+            dim,
+            num_heads=8,
+            qkv_bias=False,
+            qk_scale=None,
+            attn_drop=0.0,
+            proj_drop=0.0,
+            sr_ratio=1,
     ):
         super().__init__()
         assert (
-            dim % num_heads == 0
+                dim % num_heads == 0
         ), f"dim {dim} should be divided by num_heads {num_heads}."
 
         self.dim = dim
         self.num_heads = num_heads
         head_dim = dim // num_heads
-        self.scale = qk_scale or head_dim**-0.5
+        self.scale = qk_scale or head_dim ** -0.5
 
         self.q = nn.Linear(dim, dim, bias=qkv_bias)
         self.kv = nn.Linear(dim, dim * 2, bias=qkv_bias)
@@ -146,18 +146,18 @@ class Attention(nn.Module):
 class Block(nn.Module):
 
     def __init__(
-        self,
-        dim,
-        num_heads,
-        mlp_ratio=4.0,
-        qkv_bias=False,
-        qk_scale=None,
-        drop=0.0,
-        attn_drop=0.0,
-        drop_path=0.0,
-        act_layer=nn.GELU,
-        norm_layer=nn.LayerNorm,
-        sr_ratio=1,
+            self,
+            dim,
+            num_heads,
+            mlp_ratio=4.0,
+            qkv_bias=False,
+            qk_scale=None,
+            drop=0.0,
+            attn_drop=0.0,
+            drop_path=0.0,
+            act_layer=nn.GELU,
+            norm_layer=nn.LayerNorm,
+            sr_ratio=1,
     ):
         super().__init__()
         self.norm1 = norm_layer(dim)
@@ -254,26 +254,27 @@ class OverlapPatchEmbed(nn.Module):
 
 class MixVisionTransformer(nn.Module):
     def __init__(
-        self,
-        img_size=224,
-        patch_size=16,
-        in_chans=3,
-        num_classes=1000,
-        embed_dims=[64, 128, 256, 512],
-        num_heads=[1, 2, 4, 8],
-        mlp_ratios=[4, 4, 4, 4],
-        qkv_bias=False,
-        qk_scale=None,
-        drop_rate=0.0,
-        attn_drop_rate=0.0,
-        drop_path_rate=0.0,
-        norm_layer=nn.LayerNorm,
-        depths=[3, 4, 6, 3],
-        sr_ratios=[8, 4, 2, 1],
+            self,
+            img_size=224,
+            patch_size=16,
+            in_chans=3,
+            num_classes=1000,
+            embed_dims=[64, 128, 256, 512],
+            num_heads=[1, 2, 4, 8],
+            mlp_ratios=[4, 4, 4, 4],
+            qkv_bias=False,
+            qk_scale=None,
+            drop_rate=0.0,
+            attn_drop_rate=0.0,
+            drop_path_rate=0.0,
+            norm_layer=nn.LayerNorm,
+            depths=[3, 4, 6, 3],
+            sr_ratios=[8, 4, 2, 1],
     ):
         super().__init__()
         self.num_classes = num_classes
         self.depths = depths
+        self.out_planes = 1024
 
         # patch_embed
         self.patch_embed1 = OverlapPatchEmbed(
@@ -394,6 +395,9 @@ class MixVisionTransformer(nn.Module):
 
         self.apply(self._init_weights)
 
+    def get_outplanes(self):
+        return self.out_planes
+
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=0.02)
@@ -410,11 +414,7 @@ class MixVisionTransformer(nn.Module):
                 m.bias.data.zero_()
 
     def init_weights(self, pretrained=None):
-        if isinstance(pretrained, str):
-            logger = get_root_logger()
-            load_checkpoint(
-                self, pretrained, map_location="cpu", strict=False, logger=logger
-            )
+        return
 
     def reset_drop_path(self, drop_path_rate):
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(self.depths))]
@@ -563,9 +563,41 @@ class mit_b2(MixVisionTransformer):
         )
 
 
+class mit_b3(MixVisionTransformer):
+    def __init__(self, **kwargs):
+        super(mit_b3, self).__init__(
+            patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[4, 4, 4, 4],
+            qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[3, 4, 18, 3], sr_ratios=[8, 4, 2, 1],
+            drop_rate=0.0, drop_path_rate=0.1)
+
+
+class mit_b4(MixVisionTransformer):
+    def __init__(self, **kwargs):
+        super(mit_b4, self).__init__(
+            patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[4, 4, 4, 4],
+            qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[3, 8, 27, 3], sr_ratios=[8, 4, 2, 1],
+            drop_rate=0.0, drop_path_rate=0.1)
+
+
+class mit_b5(MixVisionTransformer):
+    def __init__(self, **kwargs):
+        super(mit_b5, self).__init__(
+            patch_size=4, embed_dims=[64, 128, 320, 512], num_heads=[1, 2, 5, 8], mlp_ratios=[4, 4, 4, 4],
+            qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), depths=[3, 6, 40, 3], sr_ratios=[8, 4, 2, 1],
+            drop_rate=0.0, drop_path_rate=0.1)
+
+
 def segformer_b2(**kwargs):
     model = mit_b2()
-    if os.path.exists("./pretrained/pvt_medium.pth"):
-        state_dict = torch.load("./pretrained/pvt_medium.pth")
+    if os.path.exists("./pretrained/mit_b2.pth"):
+        state_dict = torch.load("./pretrained/mit_b2.pth")
+        model.load_state_dict(state_dict, strict=False)
+    return model
+
+
+def segformer_b4(**kwargs):
+    model = mit_b4()
+    if os.path.exists("./pretrained/mit_b4.pth"):
+        state_dict = torch.load("./pretrained/mit_b4.pth")
         model.load_state_dict(state_dict, strict=False)
     return model

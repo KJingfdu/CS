@@ -10,13 +10,13 @@ dataset: # Required.
     #rand_rotation: [-10.0, 10.0]
     crop:
       type: rand
-      size: [769, 769] # crop image with HxW size
+      size: [896, 869] # crop image with HxW size
   val:
     data_root: ./data/cityscapes
     data_list: ./data/splits/cityscapes/val.txt
     crop:
       type: center
-      size: [769, 769] # crop image with HxW size
+      size: [896, 896] # crop image with HxW size
   batch_size: 2
   n_sup: 372
   noise_std: 0.1
@@ -81,7 +81,7 @@ net: # Required.
     aux_plane: 320
     loss_weight: 0.4
   encoder:
-    type: cs.models.pyramidvit.pvt_medium
+    type: cs.models.mix.segformer_b2
     kwargs:
       multi_grid: True
       zero_init_residual: True
